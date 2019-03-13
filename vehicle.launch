@@ -1,0 +1,9 @@
+<launch>
+
+    <group ns="vehicle1">
+        <node pkg="virtana_starter_project" name="vehicle" type="vehicle_node.py">
+            <rosparam file="/home/keenan/catkin_ws/src/virtana_starter_project/scripts/parameters.yaml" command="load" />
+        </node>
+    </group>
+
+</launch>
