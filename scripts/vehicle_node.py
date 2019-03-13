@@ -293,7 +293,6 @@ class VehicleBot:
         #Publish point cloud
         self.point_cloud_publisher.publish(point_cloud)
     
-
 #Needs to subscribe to a node that will provide keyboard input for movement of the node. then will publish the joint states
 
 
