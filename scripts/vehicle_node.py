@@ -11,6 +11,7 @@ from sensor_msgs.msg import PointCloud2, JointState
 from scipy.interpolate import griddata
 import sensor_msgs.point_cloud2 as pcl2
 from visualization_msgs.msg import Marker
+from math import pi
 
 
 class VehicleBot:
@@ -27,6 +28,9 @@ class VehicleBot:
 
         #Publisher for PoseStamped() Message
         self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=10)
+
+        #Publisher for Joint PoseStamped() Message
+        self.joint_pose_publisher = rospy.Publisher("/move_joint/cmd", PoseStamped, queue_size=10)
 
         #Publisher for a Float32MultiArray() Message
         self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=10)
@@ -63,20 +67,21 @@ class VehicleBot:
         self.pose = Pose()
         
         self.joint_pose = Pose()
+        self.joint_pose.position.x = -1.0
 
         self.cloud_msg = PointCloud2()
 
         #Timer to update pose every 10ms
-        rospy.Timer(rospy.Duration(0.01), self.update_position)
+        rospy.Timer(rospy.Duration(0.05), self.update_position)
 
         #Timer to publish PoseStamped msg every 10ms
-        rospy.Timer(rospy.Duration(0.01), self.publish_pose_msg)
+        rospy.Timer(rospy.Duration(0.05), self.publish_pose_msg)
 
         #Timer to publish Float32MultiArray msg every 10ms
-        rospy.Timer(rospy.Duration(0.01), self.publish_array_msg)
+        rospy.Timer(rospy.Duration(0.05), self.publish_array_msg)
 
-        #Timer to publish Float32MultiArray msg every 10ms
-        rospy.Timer(rospy.Duration(0.01), self.update_joint_positions)
+        #Timer to publish Joint msg and pose for joint every 10ms
+        rospy.Timer(rospy.Duration(0.05), self.update_joint_positions)
 
         #Timer to publish Terrain Map
         self.point_cloud_timer = rospy.Timer(rospy.Duration(0.5), self.publish_terrain_map)
@@ -100,7 +105,7 @@ class VehicleBot:
 
         viz_points.scale.x = v_height
         viz_points.scale.y = v_width
-        viz_points.scale.z = 0.0
+        viz_points.scale.z = 0.01
 
         viz_points.color.a = 1.0
         viz_points.color.r = 1.0
@@ -200,7 +205,7 @@ class VehicleBot:
 
         resolution =  rospy.get_param('/resolution')
         #time elapsed since last update position call (using event.current_real - event.last_real throws an error on first run as event.last_real does not exist in the first run)
-        time = 0.01
+        time = 0.05
 
         #Calculate angle turned in the given time using omega = theta/time
         angle = self.twist.angular.z*time
@@ -281,6 +286,7 @@ class VehicleBot:
         self.pose_publisher.publish(self.pose_stamped)
 
 
+
     def publish_array_msg(self, event):
 
         #Append data
@@ -303,6 +309,7 @@ class VehicleBot:
         #Publish point cloud
         self.point_cloud_publisher.publish(point_cloud)
     
+
     def joints_listener(self, data):
 
         self.joint_twist = data
@@ -310,13 +317,13 @@ class VehicleBot:
 
     def update_joint_positions(self, event):
         #time elapsed since last update position call (using event.current_real - event.last_real throws an error on first run as event.last_real does not exist in the first run)
-        time = 0.01
+        time = 0.05
 
         #Calculate angle turned in the given time using omega = theta/time
-        angle = self.joint_twist.angular.z*time
+        angle = self.twist.angular.z*time
 
         #Calculate distance travelled in the given time using linear velocity = arc distance/time
-        distance = 1.0
+        distance = self.twist.linear.x*time
 
         #Calculate yaw, pitch and roll of the robot (pitch and roll currently not calculated)
         self.joint_pose.orientation.x = 0.0
@@ -326,16 +333,44 @@ class VehicleBot:
         #Calculate vehicle x, y, z position coordinates 
         self.joint_pose.position.x += (distance)*cos(self.joint_pose.orientation.z)
         self.joint_pose.position.y += (distance)*sin(self.joint_pose.orientation.z)
+        self.joint_pose.position.z = self.pose.position.z
 
         self.js.header = Header()
         self.js.header.stamp = rospy.Time.now()
-        self.js.position = [self.joint_pose.position.x, self.joint_pose.position.y]
-        self.js.velocity = [self.joint_twist.angular.z]
+        self.js.position = [self.joint_pose.position.x, self.joint_pose.position.y, self.joint_pose.position.z]
+        self.js.velocity = [self.joint_twist.angular.y]
 
         self.joint_publisher.publish(self.js)
 
 
-#Needs to subscribe to a node that will provide keyboard input for movement of the node. then will publish the joint states
+        ####################################
+
+        #Header
+        msg = PoseStamped()
+
+        #Header
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = "map"
+
+        msg.pose.position.x =  self.joint_pose.position.x
+        msg.pose.position.y =  self.joint_pose.position.y
+        msg.pose.position.z = self.joint_pose.position.z
+
+         #Convert Euler to Quarternion
+        q1 = tf.transformations.quaternion_from_euler(self.joint_pose.orientation.x, self.joint_pose.orientation.y, self.joint_pose.orientation.z, 'sxyz')
+
+        msg.pose.orientation.x = q1[0]
+        msg.pose.orientation.y = q1[1]
+        msg.pose.orientation.z = q1[2]
+        msg.pose.orientation.w = q1[3]
+
+        #Broadcast vehicle frame which is a child of the world frame
+        br2 = tf.TransformBroadcaster()
+        br2.sendTransform((-1.0, 0.0, 0.0), (0.0,0.0,0.0,1), rospy.Time.now(),"joint_frame", "vehicle_frame")
+
+        self.joint_pose_publisher.publish(msg)
+        
+
 
 
 if __name__ == '__main__':

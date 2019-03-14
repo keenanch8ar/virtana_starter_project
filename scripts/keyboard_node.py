@@ -29,8 +29,8 @@ def keyboard_node():
             twist.linear.y = y*speed
             twist.linear.z = z*speed
             twist.angular.x = 0
-            twist.angular.y = 0
-            twist.angular.z = th*turn
+            twist.angular.y = th*turn
+            twist.angular.z = 0
             key_pub.publish(twist)
         elif key in moveBindings2.keys():
             x = moveBindings2[key][0]
@@ -42,8 +42,8 @@ def keyboard_node():
             twist.linear.y = y*speed
             twist.linear.z = z*speed
             twist.angular.x = 0
-            twist.angular.y = 0
-            twist.angular.z = th*turn
+            twist.angular.y = th*turn
+            twist.angular.z = 0
             key_pub.publish(twist)
 
     rospy.spin()
