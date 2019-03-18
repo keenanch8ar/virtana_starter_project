@@ -12,6 +12,7 @@ from scipy.interpolate import griddata
 import sensor_msgs.point_cloud2 as pcl2
 from visualization_msgs.msg import Marker
 from math import pi
+import Queue
 
 
 class VehicleBot:
@@ -47,12 +48,6 @@ class VehicleBot:
         #Create Vehicle Marker
         self.marker = self.create_vehicle_marker()
 
-        #Create Pose Stamped Message 
-        self.pose_stamped = self.create_pose_stamped()
-
-        #Create Float32MultiArray() Message
-        self.float_array = self.create_float_array()
-
         #Create Point Cloud
         self.cloud = self.create_terrain_map()
 
@@ -65,26 +60,25 @@ class VehicleBot:
         self.joint_twist = Twist()
 
         self.pose = Pose()
+
+        self.vehicle_yaw = 0.0
+        self.vehicle_pitch = 0.0
+        self.vehicle_roll = 0.0
+        self.vehicle_x = 0.0
+        self.vehicle_y = 0.0
+        self.vehicle_z = 0.0
         
         self.joint_pose = Pose()
+
         self.joint_pose.position.x = -1.0
 
         self.cloud_msg = PointCloud2()
 
-        #Timer to update pose every 10ms
+        #Timer to update pose every 50ms
         rospy.Timer(rospy.Duration(0.05), self.update_position)
 
-        #Timer to publish PoseStamped msg every 10ms
-        rospy.Timer(rospy.Duration(0.05), self.publish_pose_msg)
-
-        #Timer to publish Float32MultiArray msg every 10ms
-        rospy.Timer(rospy.Duration(0.05), self.publish_array_msg)
-
         #Timer to publish Joint msg and pose for joint every 10ms
-        rospy.Timer(rospy.Duration(0.05), self.update_joint_positions)
-
-        #Timer to publish Terrain Map
-        self.point_cloud_timer = rospy.Timer(rospy.Duration(0.5), self.publish_terrain_map)
+        #rospy.Timer(rospy.Duration(0.05), self.update_joint_positions)
 
         #Keeps program runninng until interrupted
         rospy.spin()
@@ -123,46 +117,9 @@ class VehicleBot:
         return viz_points
 
 
-    def create_pose_stamped(self):
-
-        #Create posestamped message
-        msg = PoseStamped()
-
-        #Header details (if im sending a posestmaped message to my command my vehicle, does the header have to be the world frame of reference or to my robot's frame of reference?)
-        msg.header.frame_id = "map"
-        msg.header.stamp = rospy.Time.now()
-
-        #Pose information
-        msg.pose.position.x = 0.0
-        msg.pose.position.y = 0.0
-        msg.pose.position.z = 0.0
-
-        msg.pose.orientation.x = 0.0
-        msg.pose.orientation.y = 0.0
-        msg.pose.orientation.z = 0.0
-        msg.pose.orientation.w = 1.0
-
-        return msg
-
-
-    def create_float_array(self):
-        #Create array message
-        array_msg = Float32MultiArray()
-
-        #Array details
-        array_msg.layout.dim.append(MultiArrayDimension())
-        array_msg.layout.dim[0].label = "vehicle_position"
-        array_msg.layout.dim[0].size = 3
-        array_msg.layout.dim[0].stride = 3
-
-        return array_msg
-
-
     def create_terrain_map(self):
 
         #Get parameters
-        h = rospy.get_param('/gauss_h')
-        w = rospy.get_param('/gauss_w')
         mu = rospy.get_param('/mu')
         sigma = rospy.get_param('/sigma')
         sigma_filt = rospy.get_param('/sigma_filt')
@@ -170,7 +127,9 @@ class VehicleBot:
         width = rospy.get_param('/width')
         resolution =  rospy.get_param('/resolution')
 
-        #Fill array of size h x w with Gaussian Noise
+        #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
+        h = int(((height*2) + 1)*(resolution*1000))
+        w = int(((width*2) + 1)*(resolution*1000))
         grid_map = (h,w)
         gaussian_array = np.random.normal(mu, sigma, grid_map)
 
@@ -178,6 +137,7 @@ class VehicleBot:
         gaussian_array = gaussian_filter(gaussian_array, sigma_filt)
 
         #Create an list and fill the list with x, y values and z the values will be the filtered gaussian noise
+        # TODO perform these calculations without for loops
         incr_x = 0
         incr_y = 0
         cloud = []
@@ -198,29 +158,41 @@ class VehicleBot:
     def velocity_cmd_callback(self, data):
 
         #assign updated command velocities to twist variable
+
         self.twist = data
 
 
     def update_position(self, event):
 
         resolution =  rospy.get_param('/resolution')
-        #time elapsed since last update position call (using event.current_real - event.last_real throws an error on first run as event.last_real does not exist in the first run)
-        time = 0.05
+
+        #Local variable to calculate position based on most recent command velocity data
+        position_data = self.twist
+
+        #time elapsed since last update position call
+        if hasattr(event, 'last_real'):
+            if event.last_real is None:
+                event.last_real = rospy.Time.now()
+                time = event.current_real - event.last_real
+            else:
+                time = event.current_real - event.last_real
+        
+        time = time.to_sec()
 
         #Calculate angle turned in the given time using omega = theta/time
-        angle = self.twist.angular.z*time
+        angle = position_data.angular.z*time
 
         #Calculate distance travelled in the given time using linear velocity = arc distance/time
-        distance = self.twist.linear.x*time
+        distance = position_data.linear.x*time
 
         #Calculate yaw, pitch and roll of the robot (pitch and roll currently not calculated)
-        self.pose.orientation.x = 0.0
-        self.pose.orientation.y = 0.0
-        self.pose.orientation.z += angle
+        self.vehicle_roll = 0.0
+        self.vehicle_pitch = 0.0
+        self.vehicle_yaw += angle
 
         #Calculate vehicle x, y, z position coordinates 
-        self.pose.position.x += (distance)*cos(self.pose.orientation.z)
-        self.pose.position.y += (distance)*sin(self.pose.orientation.z)
+        self.vehicle_x += (distance)*cos(self.vehicle_yaw)
+        self.vehicle_y += (distance)*sin(self.vehicle_yaw)
 
         myarray = np.asarray(self.cloud)
 
@@ -228,15 +200,15 @@ class VehicleBot:
         values = []
 
         for x in range(len(myarray)):
-            if (self.pose.position.x - 0.05 - resolution) <= myarray[x,0] <=  (self.pose.position.x + 0.05 + resolution):
-                if (self.pose.position.y - 0.05 - resolution) <= myarray[x,1] <= (self.pose.position.y + 0.05 + resolution):
+            if (self.vehicle_x - 0.05 - resolution) <= myarray[x,0] <=  (self.vehicle_x + 0.05 + resolution):
+                if (self.vehicle_y - 0.05 - resolution) <= myarray[x,1] <= (self.vehicle_y + 0.05 + resolution):
                     innerlist = []
                     innerlist.append(myarray[x,0])
                     innerlist.append(myarray[x,1])
                     values.append(myarray[x,2])
                     points.append(innerlist)
 
-        x1, y1 = np.meshgrid(np.linspace((self.pose.position.x-0.05), (self.pose.position.x+0.05), 50), np.linspace((self.pose.position.y-0.05), (self.pose.position.y+0.05), 50))
+        x1, y1 = np.meshgrid(np.linspace((self.vehicle_x-0.05), (self.vehicle_x+0.05), 50), np.linspace((self.vehicle_y-0.05), (self.vehicle_y+0.05), 50))
                 
         grid_z2 = griddata(points, values, (x1, y1), method='linear')
 
@@ -248,57 +220,72 @@ class VehicleBot:
                 
         avg = sum(flat_list)/len(flat_list)
 
-        self.pose.position.z = avg
+        self.vehicle_z = avg
+
+        #Publish all messages
+        self.publish_messages(self.vehicle_x, self.vehicle_y, self.vehicle_z, self.vehicle_roll, self.vehicle_pitch, self.vehicle_yaw )
 
 
-    def publish_pose_msg(self, event):
-        
-        #Header
-        self.pose_stamped.header.stamp = rospy.Time.now()
+    def publish_messages(self, x, y, z, roll, pitch, yaw):
+
+        #####################################################################################
+
+        #Create a posestamped message containing position information
+
+        #Create pose message
+        msg = PoseStamped()
+
+        #Header details for pose message
+        msg.header.frame_id = "map"
+        msg.header.stamp = rospy.Time.now()
 
         #Pose information
-        self.pose_stamped.pose.position.x = self.pose.position.x
-        self.pose_stamped.pose.position.y = self.pose.position.y
-        self.pose_stamped.pose.position.z = self.pose.position.z
+        msg.pose.position.x = x
+        msg.pose.position.y = y
+        msg.pose.position.z = z
 
         #Convert Euler to Quarternion
-        q = tf.transformations.quaternion_from_euler(self.pose.orientation.x, self.pose.orientation.y, self.pose.orientation.z, 'sxyz')
+        q = tf.transformations.quaternion_from_euler(roll, pitch, yaw, 'sxyz')
         
-        self.pose_stamped.pose.orientation.x = q[0]
-        self.pose_stamped.pose.orientation.y = q[1]
-        self.pose_stamped.pose.orientation.z = q[2]
-        self.pose_stamped.pose.orientation.w = q[3]
+        msg.pose.orientation.x = q[0]
+        msg.pose.orientation.y = q[1]
+        msg.pose.orientation.z = q[2]
+        msg.pose.orientation.w = q[3]
 
         #Broadcast vehicle frame which is a child of the world frame
         br = tf.TransformBroadcaster()
-        br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z ), q, rospy.Time.now(),"vehicle_frame", "map")
+        br.sendTransform((x, y, z ), q, rospy.Time.now(),"vehicle_frame", "map")
 
-        self.marker.pose.position.x = self.pose.position.x 
-        self.marker.pose.position.y = self.pose.position.y 
-        self.marker.pose.position.z = self.pose.position.z 
+        ###################################################################################
+
+        #Create a marker to vizualize the footprint of the vehicle
+        self.marker.pose.position.x = x
+        self.marker.pose.position.y = y
+        self.marker.pose.position.z = z
         self.marker.pose.orientation.x = q[0]
         self.marker.pose.orientation.y = q[1]
         self.marker.pose.orientation.z = q[2]
         self.marker.pose.orientation.w = q[3]
 
-        #Publish marker and pose information
-        self.marker_publisher.publish(self.marker)
-        self.pose_publisher.publish(self.pose_stamped)
+        ##################################################################################
 
+        #Create an multi array message containing pose information
 
-
-    def publish_array_msg(self, event):
+        #Create array message
+        array_msg = Float32MultiArray()
+        array_msg.layout.dim.append(MultiArrayDimension())
+        array_msg.layout.dim[0].label = "vehicle_position"
+        array_msg.layout.dim[0].size = 3
+        array_msg.layout.dim[0].stride = 3
 
         #Append data
-        self.float_array.data.append(self.pose.position.x)
-        self.float_array.data.append(self.pose.position.y)
-        self.float_array.data.append(self.pose.orientation.z)
+        array_msg.data.append(x)
+        array_msg.data.append(y)
+        array_msg.data.append(z)
 
-        #Publish
-        self.pose_array_publisher.publish(self.float_array)
+        ##################################################################################
 
-
-    def publish_terrain_map(self, event):
+        #Create point cloud and publish to rviz
 
         #Create a point cloud from the xyz values in the array list
         header = Header()
@@ -306,7 +293,11 @@ class VehicleBot:
         header.frame_id = 'map'
         point_cloud = pcl2.create_cloud_xyz32(header, self.cloud)
 
-        #Publish point cloud
+
+        #Publish pose, vizualization, array information and point cloud
+        self.marker_publisher.publish(self.marker)
+        self.pose_publisher.publish(msg)
+        self.pose_array_publisher.publish(array_msg)
         self.point_cloud_publisher.publish(point_cloud)
     
 
@@ -370,7 +361,6 @@ class VehicleBot:
 
         self.joint_pose_publisher.publish(msg)
         
-
 
 
 if __name__ == '__main__':
