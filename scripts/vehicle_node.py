@@ -2,17 +2,17 @@
 import rospy
 import tf
 import numpy as np
-import ros_numpy
+import copy
+import threading
+import sensor_msgs.point_cloud2 as pcl2
 from scipy.ndimage import gaussian_filter
 from numpy import sin, cos
 from geometry_msgs.msg import Twist, PoseStamped, Pose, Point
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
 from scipy.interpolate import griddata
-import sensor_msgs.point_cloud2 as pcl2
 from visualization_msgs.msg import Marker
-from math import pi
-import Queue
+
 
 
 class VehicleBot:
@@ -21,17 +21,31 @@ class VehicleBot:
 
         rospy.init_node('vehicle_node', anonymous=True)
 
+        #Create Point Cloud
+        self.cloud = self.create_terrain_map()
+
+        #Create Twist variables to store cmd_vel
+        self.twist = Twist()
+
+        #Create variables for calculations
+        self.vehicle_yaw = 0.0
+        self.vehicle_pitch = 0.0
+        self.vehicle_roll = 0.0
+        self.vehicle_x = 0.0
+        self.vehicle_y = 0.0
+        self.vehicle_z = 0.0
+
+        #Create a lock to prevent race conditions when calculating position
+        self.lock = threading.Lock()
+
+        #Timer to update pose every 50ms
+        rospy.Timer(rospy.Duration(0.05), self.update_position)
+
         #Subscriber for to teleop key
         rospy.Subscriber("/turtlebot_teleop/cmd_vel", Twist, self.velocity_cmd_callback)
 
-        #Subscriber for to keyboard commands for joints
-        rospy.Subscriber("/keyboard_cmd_vel", Twist, self.joints_listener)
-
         #Publisher for PoseStamped() Message
         self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=10)
-
-        #Publisher for Joint PoseStamped() Message
-        self.joint_pose_publisher = rospy.Publisher("/move_joint/cmd", PoseStamped, queue_size=10)
 
         #Publisher for a Float32MultiArray() Message
         self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=10)
@@ -42,46 +56,15 @@ class VehicleBot:
         #Publisher for Vehicle Marker
         self.grid_publisher = rospy.Publisher('/grid_marker', Marker, queue_size=10 )
 
-        #Publisher for Joints State
-        self.joint_publisher = rospy.Publisher('/my_joint_states', JointState, queue_size=1) 
-
-        #Create Point Cloud
-        self.cloud = self.create_terrain_map()
-
-        #Create Joint State Message
-        self.js = JointState()
-
-        #Create Twist variables to store cmd_vel
-        self.twist = Twist()
-        self.joint_twist = Twist()
-
-        #Create variables for calculations
-        self.vehicle_yaw = 0.0
-        self.vehicle_pitch = 0.0
-        self.vehicle_roll = 0.0
-        self.vehicle_x = 0.0
-        self.vehicle_y = 0.0
-        self.vehicle_z = 0.0
-
-        self.joint_yaw = -1.0
-        self.joint_pitch = 0.0
-        self.joint_roll = 0.0
-        self.joint_x = 0.0
-        self.joint_y = 0.0
-        self.joint_z = 0.0
-
-        self.cloud_msg = PointCloud2()
-
-        #Timer to update pose every 50ms
-        rospy.Timer(rospy.Duration(0.05), self.update_position)
-
-        #Timer to publish Joint msg and pose for joint every 10ms (doesn't work yet)
-        #rospy.Timer(rospy.Duration(0.05), self.update_joint_positions)
-
         #Keeps program running until interrupted
         rospy.spin()
 
+
     def create_terrain_map(self):
+
+        """
+        Creates a list of points from an array of gaussian noise given a specified height and width 
+        """
 
         #Get parameters
         mu = rospy.get_param('/mu')
@@ -120,21 +103,34 @@ class VehicleBot:
 
 
     def velocity_cmd_callback(self, data):
-
-        #assign updated command velocities to twist variable
-
-        self.twist = data
+        
+        """
+        Updates the most recent command velocity to a twist variable
+        """
+        self.lock.acquire()
+        try:
+            self.twist = data
+        finally:
+            self.lock.release()
 
 
     def update_position(self, event):
 
+        """
+        Computes the pose of the vehicle within a given footprint height and width 
+        """
+
         #Load parameters
         resolution =  rospy.get_param('/resolution')
-        v_height =  rospy.get_param('/v_height')
-        v_width =  rospy.get_param('/v_width')
+        vehicle_height =  rospy.get_param('/v_height')
+        vehicle_width =  rospy.get_param('/v_width')
 
-        #Local variable to calculate position based on most recent command velocity data
-        position_data = self.twist
+        #Create a copy of the most recent stored twist data to perform calculations with
+        self.lock.acquire()
+        try:
+            velocity_data = copy.deepcopy(self.twist)
+        finally:
+            self.lock.release()
 
         #time elapsed since last update position call
         if hasattr(event, 'last_real'):
@@ -147,10 +143,11 @@ class VehicleBot:
         time = time.to_sec()
 
         #Calculate angle turned in the given time using omega = theta/time
-        angle = position_data.angular.z*time
+        #TODO Currently it yaws, then moves forward. Revist calculation to do both simultaneously
+        angle = velocity_data.angular.z*time
 
         #Calculate distance travelled in the given time using linear velocity = arc distance/time
-        distance = position_data.linear.x*time
+        distance = velocity_data.linear.x*time
 
         #Calculate yaw, pitch and roll of the robot (pitch and roll currently not calculated)
         self.vehicle_roll = 0.0
@@ -160,7 +157,7 @@ class VehicleBot:
         #Calculate vehicle x, y, z position coordinates 
         self.vehicle_x += (distance)*cos(self.vehicle_yaw)
         self.vehicle_y += (distance)*sin(self.vehicle_yaw)
-
+    
         #Convert the point cloud to an array for faster access
         myarray = np.asarray(self.cloud)
 
@@ -168,9 +165,10 @@ class VehicleBot:
         values = []
 
         #Find all the points within the point cloud array that lie within the footprint of the vehicle
+        # TODO Do this cleaner 
         for x in range(len(myarray)):
-            if (self.vehicle_x - v_height - resolution) <= myarray[x,0] <=  (self.vehicle_x + v_height + resolution):
-                if (self.vehicle_y - v_width - resolution) <= myarray[x,1] <= (self.vehicle_y + v_width + resolution):
+            if (self.vehicle_x - vehicle_height - resolution) <= myarray[x,0] <=  (self.vehicle_x + vehicle_height + resolution):
+                if (self.vehicle_y - vehicle_width - resolution) <= myarray[x,1] <= (self.vehicle_y + vehicle_width + resolution):
                     innerlist = []
                     innerlist.append(myarray[x,0])
                     innerlist.append(myarray[x,1])
@@ -178,7 +176,7 @@ class VehicleBot:
                     points.append(innerlist)
 
         #Create a grid mesh of the size given by the footprint of the vehicle
-        x1,y1 = np.meshgrid(np.linspace((self.vehicle_x-v_height), (self.vehicle_x+v_height), 50), np.linspace((self.vehicle_y-v_width), (self.vehicle_y+v_width), 50))
+        x1,y1 = np.meshgrid(np.linspace((self.vehicle_x-vehicle_height), (self.vehicle_x+vehicle_height), 50), np.linspace((self.vehicle_y-vehicle_width), (self.vehicle_y+vehicle_width), 50))
                 
         #Linear Interpolation of the grid mesh onto the points in the point cloud that lie within the grid mesh
         grid_z2 = griddata(points, values, (x1, y1), method='cubic')
@@ -196,12 +194,20 @@ class VehicleBot:
 
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(self.vehicle_roll, self.vehicle_pitch, self.vehicle_yaw)
-        
+
+        #Broadcast vehicle frame which is a child of the world frame
+        br = tf.TransformBroadcaster()
+        br.sendTransform((self.vehicle_x, self.vehicle_y, self.vehicle_z), q, rospy.Time.now(),"vehicle_frame", "map")
+
         #Publish all messages
         self.publish_messages(self.vehicle_x, self.vehicle_y, self.vehicle_z, x1, y1, grid_z2, q)
 
 
     def publish_messages(self, x, y, z, x1, y1, grid_z2, q):
+
+        """
+        Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization marker. 
+        """
 
         #####################################################################################
 
@@ -218,15 +224,11 @@ class VehicleBot:
         msg.pose.position.x = x
         msg.pose.position.y = y
         msg.pose.position.z = z
-        
         msg.pose.orientation.x = q[0]
         msg.pose.orientation.y = q[1]
         msg.pose.orientation.z = q[2]
         msg.pose.orientation.w = q[3]
 
-        #Broadcast vehicle frame which is a child of the world frame
-        br = tf.TransformBroadcaster()
-        br.sendTransform((x, y, z), q, rospy.Time.now(),"vehicle_frame", "map")
 
         ##################################################################################
 
@@ -291,78 +293,6 @@ class VehicleBot:
         self.point_cloud_publisher.publish(point_cloud)
         self.grid_publisher.publish(viz_points)
 
-        
-    #Doesn't work yet, ignore
-    def joints_listener(self, data):
-
-        self.joint_twist = data
-
-    #Doesn't work yet, ignore
-    def update_joint_positions(self, event):
-        
-        #Local variable to calculate position based on most recent command velocity data
-        position_data = self.twist
-
-        #time elapsed since last update position call
-        if hasattr(event, 'last_real'):
-            if event.last_real is None:
-                event.last_real = rospy.Time.now()
-                time = event.current_real - event.last_real
-            else:
-                time = event.current_real - event.last_real
-        
-        time = time.to_sec()
-
-        #Calculate angle turned in the given time using omega = theta/time
-        angle = position_data.angular.z*time
-
-        #Calculate distance travelled in the given time using linear velocity = arc distance/time
-        distance = position_data.linear.x*time
-
-        #Calculate yaw, pitch and roll of the robot (pitch and roll currently not calculated)
-        self.joint_roll = 0.0
-        self.joint_pitch = 0.0
-        self.joint_yaw += angle
-
-        #Calculate vehicle x, y, z position coordinates 
-        self.joint_x += (distance)*cos(self.joint_yaw)
-        self.joint_y += (distance)*sin(self.joint_yaw)
-        self.joint_z = 0.0
-
-        self.js.header = Header()
-        self.js.header.stamp = rospy.Time.now()
-        self.js.position = [self.joint_x, self.joint_y, self.joint_z]
-        self.js.velocity = [position_data.angular.y]
-
-        self.joint_publisher.publish(self.js)
-
-        ###############################################################
-
-        #Header
-        msg = PoseStamped()
-
-        #Header
-        msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = "map"
-
-        msg.pose.position.x =  self.joint_x
-        msg.pose.position.y =  self.joint_y
-        msg.pose.position.z =  self.joint_z
-
-         #Convert Euler to Quarternion
-        q1 = tf.transformations.quaternion_from_euler(self.joint_roll, self.joint_pitch, self.joint_yaw, 'sxyz')
-
-        msg.pose.orientation.x = q1[0]
-        msg.pose.orientation.y = q1[1]
-        msg.pose.orientation.z = q1[2]
-        msg.pose.orientation.w = q1[3]
-
-        #Broadcast vehicle frame which is a child of the world frame
-        br2 = tf.TransformBroadcaster()
-        br2.sendTransform((-1.0, 0.0, 0.0), (0.0,0.0,0.0,1), rospy.Time.now(),"joint_frame", "vehicle_frame")
-
-        self.joint_pose_publisher.publish(msg)
-        
 
 if __name__ == '__main__':
     try:
