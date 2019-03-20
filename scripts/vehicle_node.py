@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import rospy
 import tf
+from math import ceil
 import numpy as np
 import copy
 import threading
@@ -20,6 +21,16 @@ class VehicleBot:
     def __init__(self):
 
         rospy.init_node('vehicle_node', anonymous=True)
+        
+        #Load parameters to be used in node
+        self.mu = rospy.get_param('/mu')
+        self.sigma = rospy.get_param('/sigma')
+        self.sigma_filt = rospy.get_param('/sigma_filt')
+        self.height = rospy.get_param('/height')
+        self.width = rospy.get_param('/width')
+        self.resolution =  rospy.get_param('/resolution')
+        self.vehicle_height =  rospy.get_param('/v_height')
+        self.vehicle_width =  rospy.get_param('/v_width')
 
         #Create Point Cloud
         self.cloud = self.create_terrain_map()
@@ -45,16 +56,16 @@ class VehicleBot:
         rospy.Subscriber("/turtlebot_teleop/cmd_vel", Twist, self.velocity_cmd_callback)
 
         #Publisher for PoseStamped() Message
-        self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=10)
+        self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=1)
 
         #Publisher for a Float32MultiArray() Message
-        self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=10)
+        self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=1)
 
         #Publisher for PointCloud2 terrain map
-        self.point_cloud_publisher = rospy.Publisher("/point_cloud", PointCloud2, latch = True, queue_size=10)
+        self.point_cloud_publisher = rospy.Publisher("/point_cloud", PointCloud2, latch = True, queue_size=1)
 
         #Publisher for Vehicle Marker
-        self.grid_publisher = rospy.Publisher('/grid_marker', Marker, queue_size=10 )
+        self.grid_publisher = rospy.Publisher('/grid_marker', Marker, queue_size=1)
 
         #Keeps program running until interrupted
         rospy.spin()
@@ -66,30 +77,23 @@ class VehicleBot:
         Creates a list of points from an array of gaussian noise given a specified height and width 
         """
 
-        #Get parameters
-        mu = rospy.get_param('/mu')
-        sigma = rospy.get_param('/sigma')
-        sigma_filt = rospy.get_param('/sigma_filt')
-        height = rospy.get_param('/height')
-        width = rospy.get_param('/width')
-        resolution =  rospy.get_param('/resolution')
 
         #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
-        h = int(((height*2) + 1)*(resolution*1000))
-        w = int(((width*2) + 1)*(resolution*1000))
+        h = self.resolution
+        w = self.resolution
         grid_map = (h,w)
-        gaussian_array = np.random.normal(mu, sigma, grid_map)
+        gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
 
         #Filter the array to smoothen the variation of the noise
-        gaussian_array = gaussian_filter(gaussian_array, sigma_filt)
+        gaussian_array = gaussian_filter(gaussian_array, self.sigma_filt)
 
         #Create an list and fill the list with x, y values and z the values will be the filtered gaussian noise
         # TODO perform these calculations without for loops
         incr_x = 0
         incr_y = 0
         cloud = []
-        for x in np.arange(-height, (height+1), resolution):
-            for y in np.arange(-width, (width+1), resolution):
+        for x in np.linspace((-self.height), (self.height), self.resolution):
+            for y in np.linspace((-self.width), (self.width), self.resolution):
                 innerlist = []
                 innerlist.append(x)
                 innerlist.append(y)
@@ -120,11 +124,6 @@ class VehicleBot:
         Computes the pose of the vehicle within a given footprint height and width 
         """
 
-        #Load parameters
-        resolution =  rospy.get_param('/resolution')
-        vehicle_height =  rospy.get_param('/v_height')
-        vehicle_width =  rospy.get_param('/v_width')
-
         #Create a copy of the most recent stored twist data to perform calculations with
         self.lock.acquire()
         try:
@@ -135,8 +134,7 @@ class VehicleBot:
         #time elapsed since last update position call
         if hasattr(event, 'last_real'):
             if event.last_real is None:
-                event.last_real = rospy.Time.now()
-                time = event.current_real - event.last_real
+                time = rospy.Duration(0.05)
             else:
                 time = event.current_real - event.last_real
         
@@ -165,10 +163,11 @@ class VehicleBot:
         values = []
 
         #Find all the points within the point cloud array that lie within the footprint of the vehicle
-        # TODO Do this cleaner 
+        # TODO Do this cleaner
+        arr = np.linspace((-self.height), (self.height), self.resolution, retstep=True)
         for x in range(len(myarray)):
-            if (self.vehicle_x - vehicle_height - resolution) <= myarray[x,0] <=  (self.vehicle_x + vehicle_height + resolution):
-                if (self.vehicle_y - vehicle_width - resolution) <= myarray[x,1] <= (self.vehicle_y + vehicle_width + resolution):
+            if (self.vehicle_x - self.vehicle_height - arr[1]) <= myarray[x,0] <=  (self.vehicle_x + self.vehicle_height + arr[1]):
+                if (self.vehicle_y - self.vehicle_width - arr[1]) <= myarray[x,1] <= (self.vehicle_y + self.vehicle_width + arr[1]):
                     innerlist = []
                     innerlist.append(myarray[x,0])
                     innerlist.append(myarray[x,1])
@@ -176,10 +175,10 @@ class VehicleBot:
                     points.append(innerlist)
 
         #Create a grid mesh of the size given by the footprint of the vehicle
-        x1,y1 = np.meshgrid(np.linspace((self.vehicle_x-vehicle_height), (self.vehicle_x+vehicle_height), 50), np.linspace((self.vehicle_y-vehicle_width), (self.vehicle_y+vehicle_width), 50))
+        x1,y1 = np.meshgrid(np.linspace((self.vehicle_x-self.vehicle_height), (self.vehicle_x+self.vehicle_height), 15), np.linspace((self.vehicle_y-self.vehicle_width), (self.vehicle_y+self.vehicle_width), 15))
                 
         #Linear Interpolation of the grid mesh onto the points in the point cloud that lie within the grid mesh
-        grid_z2 = griddata(points, values, (x1, y1), method='cubic')
+        grid_z2 = griddata(points, values, (x1, y1), method='linear')
 
         flat_list = []
 
@@ -299,3 +298,6 @@ if __name__ == '__main__':
         x = VehicleBot()
     except rospy.ROSInterruptException:
         pass
+
+
+        
