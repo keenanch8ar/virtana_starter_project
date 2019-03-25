@@ -40,11 +40,7 @@ class VehicleBot:
 
         #Create variables for calculations
         self.vehicle_yaw = 0.0
-        self.vehicle_pitch = 0.0
-        self.vehicle_roll = 0.0
-        self.vehicle_x = 0.0
-        self.vehicle_y = 0.0
-        self.vehicle_z = 0.0
+        self.pose = Pose()
 
         #Create a lock to prevent race conditions when calculating position
         self.lock = threading.Lock()
@@ -148,13 +144,13 @@ class VehicleBot:
         distance = velocity_data.linear.x*time
 
         #Calculate yaw, pitch and roll of the robot (pitch and roll currently not calculated)
-        self.vehicle_roll = 0.0
-        self.vehicle_pitch = 0.0
+        vehicle_roll = 0.0
+        vehicle_pitch = 0.0
         self.vehicle_yaw += angle
 
         #Calculate vehicle x, y, z position coordinates 
-        self.vehicle_x += (distance)*cos(self.vehicle_yaw)
-        self.vehicle_y += (distance)*sin(self.vehicle_yaw)
+        self.pose.position.x += (distance)*cos(self.vehicle_yaw)
+        self.pose.position.y += (distance)*sin(self.vehicle_yaw)
     
         #Convert the point cloud to an array for faster access
         myarray = np.asarray(self.cloud)
@@ -166,8 +162,8 @@ class VehicleBot:
         # TODO Do this cleaner
         arr = np.linspace((-self.height), (self.height), self.resolution, retstep=True)
         for x in range(len(myarray)):
-            if (self.vehicle_x - self.vehicle_height - arr[1]) <= myarray[x,0] <=  (self.vehicle_x + self.vehicle_height + arr[1]):
-                if (self.vehicle_y - self.vehicle_width - arr[1]) <= myarray[x,1] <= (self.vehicle_y + self.vehicle_width + arr[1]):
+            if (self.pose.position.x - self.vehicle_height - arr[1]) <= myarray[x,0] <=  (self.pose.position.x + self.vehicle_height + arr[1]):
+                if (self.pose.position.y - self.vehicle_width - arr[1]) <= myarray[x,1] <= (self.pose.position.y + self.vehicle_width + arr[1]):
                     innerlist = []
                     innerlist.append(myarray[x,0])
                     innerlist.append(myarray[x,1])
@@ -175,7 +171,7 @@ class VehicleBot:
                     points.append(innerlist)
 
         #Create a grid mesh of the size given by the footprint of the vehicle
-        x1,y1 = np.meshgrid(np.linspace((self.vehicle_x-self.vehicle_height), (self.vehicle_x+self.vehicle_height), 15), np.linspace((self.vehicle_y-self.vehicle_width), (self.vehicle_y+self.vehicle_width), 15))
+        x1,y1 = np.meshgrid(np.linspace((self.pose.position.x-self.vehicle_height), (self.pose.position.x+self.vehicle_height), 15), np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width), 15))
                 
         #Linear Interpolation of the grid mesh onto the points in the point cloud that lie within the grid mesh
         grid_z2 = griddata(points, values, (x1, y1), method='linear')
@@ -189,17 +185,17 @@ class VehicleBot:
         
         #Find the average and assign the calculated z-height to the vehicle
         avg = sum(flat_list)/len(flat_list)
-        self.vehicle_z = avg
+        self.pose.position.z = avg
 
         #Convert Euler Angles to Quarternion
-        q = tf.transformations.quaternion_from_euler(self.vehicle_roll, self.vehicle_pitch, self.vehicle_yaw)
+        q = tf.transformations.quaternion_from_euler(vehicle_roll, vehicle_pitch, self.vehicle_yaw)
 
         #Broadcast vehicle frame which is a child of the world frame
         br = tf.TransformBroadcaster()
-        br.sendTransform((self.vehicle_x, self.vehicle_y, self.vehicle_z), q, rospy.Time.now(),"vehicle_frame", "map")
+        br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z),q, rospy.Time.now(),"vehicle_frame", "map")
 
         #Publish all messages
-        self.publish_messages(self.vehicle_x, self.vehicle_y, self.vehicle_z, x1, y1, grid_z2, q)
+        self.publish_messages(self.pose.position.x, self.pose.position.y, self.pose.position.z, x1, y1, grid_z2, q)
 
 
     def publish_messages(self, x, y, z, x1, y1, grid_z2, q):
