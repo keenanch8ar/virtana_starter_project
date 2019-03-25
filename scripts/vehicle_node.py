@@ -158,7 +158,8 @@ class VehicleBot:
         points = []
         values = []
 
-        #Find all the points within the point cloud array that lie within the footprint of the vehicle
+        #Find all the points within the point cloud array that lie within the footprint of the vehicle.
+        # Use the position of the vehicle and the size of 
         # TODO Do this cleaner
         arr = np.linspace((-self.height), (self.height), self.resolution, retstep=True)
         for x in range(len(myarray)):
@@ -171,7 +172,10 @@ class VehicleBot:
                     points.append(innerlist)
 
         #Create a grid mesh of the size given by the footprint of the vehicle
-        x1,y1 = np.meshgrid(np.linspace((self.pose.position.x-self.vehicle_height), (self.pose.position.x+self.vehicle_height), 15), np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width), 15))
+        x1,y1 = np.meshgrid(np.linspace((self.pose.position.x-self.vehicle_height), 
+                            (self.pose.position.x+self.vehicle_height), 15), 
+                            np.linspace((self.pose.position.y-self.vehicle_width), 
+                            (self.pose.position.y+self.vehicle_width), 15))
                 
         #Linear Interpolation of the grid mesh onto the points in the point cloud that lie within the grid mesh
         grid_z2 = griddata(points, values, (x1, y1), method='linear')
@@ -192,10 +196,12 @@ class VehicleBot:
 
         #Broadcast vehicle frame which is a child of the world frame
         br = tf.TransformBroadcaster()
-        br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z),q, rospy.Time.now(),"vehicle_frame", "map")
+        br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z), 
+                        q, rospy.Time.now(),"vehicle_frame", "map")
 
         #Publish all messages
-        self.publish_messages(self.pose.position.x, self.pose.position.y, self.pose.position.z, x1, y1, grid_z2, q)
+        self.publish_messages(self.pose.position.x, self.pose.position.y, 
+                            self.pose.position.z, x1, y1, grid_z2, q)
 
 
     def publish_messages(self, x, y, z, x1, y1, grid_z2, q):
@@ -257,28 +263,27 @@ class VehicleBot:
         viz_points = Marker()
         viz_points.header.frame_id = "map"
         viz_points.header.stamp = rospy.Time.now()
-        viz_points.ns = "grid_marker"
+        viz_points.ns = "marker"
         viz_points.id = 1
         viz_points.action = viz_points.ADD
-        viz_points.type = viz_points.CUBE_LIST
+        viz_points.type = viz_points.CUBE
 
-        viz_points.scale.x = 0.02
-        viz_points.scale.y = 0.02
-        viz_points.scale.z = 0.02
+        viz_points.scale.x = 0.2
+        viz_points.scale.y = 0.2
+        viz_points.scale.z = 0.001
+
+        viz_points.pose.position.x = x
+        viz_points.pose.position.y = y
+        viz_points.pose.position.z = z
+        viz_points.pose.orientation.x = q[0]
+        viz_points.pose.orientation.y = q[1]
+        viz_points.pose.orientation.z = q[2]
+        viz_points.pose.orientation.w = q[3]
 
         viz_points.color.a = 1.0
         viz_points.color.r = 1.0
         viz_points.color.g = 0.0
         viz_points.color.b = 0.0
-        
-        for i in range(len(x1)):
-            for j in range(len(x1[i])):
-                p = Point()
-                p.x = x1[i][j]
-                p.y = y1[i][j]
-                p.z = grid_z2[i][j]
-                viz_points.points.append(p)
-
 
         ##################################################################################
 
