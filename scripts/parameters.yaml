@@ -1,10 +1,12 @@
 mu: 0.0
-sigma: 0.4
+sigma: 0.3
 sigma_filt: 3.5
-height: 5
+length: 5
 width: 5
-resolution: 300
-v_height: 0.15
+resolution: 50
+v_length: 0.15
 v_width: 0.15
+x_scale: 5.0
+y_scale: 5.0
 
 

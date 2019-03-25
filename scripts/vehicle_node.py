@@ -13,6 +13,9 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
 from scipy.interpolate import griddata
 from visualization_msgs.msg import Marker
+from scipy import interpolate
+from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import RegularGridInterpolator
 
 
 
@@ -26,12 +29,23 @@ class VehicleBot:
         self.mu = rospy.get_param('/mu')
         self.sigma = rospy.get_param('/sigma')
         self.sigma_filt = rospy.get_param('/sigma_filt')
-        self.height = rospy.get_param('/height')
+        self.length = rospy.get_param('/length')
         self.width = rospy.get_param('/width')
         self.resolution =  rospy.get_param('/resolution')
-        self.vehicle_height =  rospy.get_param('/v_height')
+        self.vehicle_length =  rospy.get_param('/v_length')
         self.vehicle_width =  rospy.get_param('/v_width')
+        self.x_scale = rospy.get_param('/x_scale')
+        self.y_scale = rospy.get_param('/y_scale')
 
+        #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
+        h = self.resolution
+        w = self.resolution
+        grid_map = (h,w)
+        self.gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
+
+        #Filter the array to smoothen the variation of the noise
+        self.gaussian_array = gaussian_filter(self.gaussian_array, self.sigma_filt)
+        
         #Create Point Cloud
         self.cloud = self.create_terrain_map()
 
@@ -73,34 +87,17 @@ class VehicleBot:
         Creates a list of points from an array of gaussian noise given a specified height and width 
         """
 
-
-        #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
-        h = self.resolution
-        w = self.resolution
-        grid_map = (h,w)
-        gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
-
-        #Filter the array to smoothen the variation of the noise
-        gaussian_array = gaussian_filter(gaussian_array, self.sigma_filt)
-
         #Create an list and fill the list with x, y values and z the values will be the filtered gaussian noise
         # TODO perform these calculations without for loops
-        incr_x = 0
-        incr_y = 0
         cloud = []
-        for x in np.linspace((-self.height), (self.height), self.resolution):
-            for y in np.linspace((-self.width), (self.width), self.resolution):
+        for i in range(len(self.gaussian_array)):
+            for j in range(len(self.gaussian_array[i])):
                 innerlist = []
-                innerlist.append(x)
-                innerlist.append(y)
-                innerlist.append(gaussian_array[incr_x][incr_y])
+                innerlist.append(float(i))
+                innerlist.append(float(j))
+                innerlist.append(self.gaussian_array[i][j])
                 cloud.append(innerlist)
-                incr_y+=1
-            incr_x+= 1
-            incr_y = 0
-
         return cloud
-
 
     def velocity_cmd_callback(self, data):
         
@@ -143,56 +140,24 @@ class VehicleBot:
         #Calculate distance travelled in the given time using linear velocity = arc distance/time
         distance = velocity_data.linear.x*time
 
-        #Calculate yaw, pitch and roll of the robot (pitch and roll currently not calculated)
-        vehicle_roll = 0.0
-        vehicle_pitch = 0.0
+        #Calculate yaw of the robot
         self.vehicle_yaw += angle
 
-        #Calculate vehicle x, y, z position coordinates 
+        #Calculate vehicle x, y, z position coordinates
+        # TODO recalculate the position based on traveling in a circular arc.
         self.pose.position.x += (distance)*cos(self.vehicle_yaw)
         self.pose.position.y += (distance)*sin(self.vehicle_yaw)
-    
-        #Convert the point cloud to an array for faster access
-        myarray = np.asarray(self.cloud)
+        #self.pose.position.z =  self.gaussian_array[int(self.pose.position.x*self.x_scale), int(self.pose.position.y*self.y_scale)]
 
-        points = []
-        values = []
+        x = np.arange(0, 50)
+        y = np.arange(0, 50)
 
-        #Find all the points within the point cloud array that lie within the footprint of the vehicle.
-        # Use the position of the vehicle and the size of 
-        # TODO Do this cleaner
-        arr = np.linspace((-self.height), (self.height), self.resolution, retstep=True)
-        for x in range(len(myarray)):
-            if (self.pose.position.x - self.vehicle_height - arr[1]) <= myarray[x,0] <=  (self.pose.position.x + self.vehicle_height + arr[1]):
-                if (self.pose.position.y - self.vehicle_width - arr[1]) <= myarray[x,1] <= (self.pose.position.y + self.vehicle_width + arr[1]):
-                    innerlist = []
-                    innerlist.append(myarray[x,0])
-                    innerlist.append(myarray[x,1])
-                    values.append(myarray[x,2])
-                    points.append(innerlist)
+        f = interpolate.interp2d(y,x,self.gaussian_array,kind='linear')
 
-        #Create a grid mesh of the size given by the footprint of the vehicle
-        x1,y1 = np.meshgrid(np.linspace((self.pose.position.x-self.vehicle_height), 
-                            (self.pose.position.x+self.vehicle_height), 15), 
-                            np.linspace((self.pose.position.y-self.vehicle_width), 
-                            (self.pose.position.y+self.vehicle_width), 15))
-                
-        #Linear Interpolation of the grid mesh onto the points in the point cloud that lie within the grid mesh
-        grid_z2 = griddata(points, values, (x1, y1), method='linear')
-
-        flat_list = []
-
-        #Flatten the list of interpolated points
-        for sublist in grid_z2:
-            for item in sublist:
-                flat_list.append(item)
-        
-        #Find the average and assign the calculated z-height to the vehicle
-        avg = sum(flat_list)/len(flat_list)
-        self.pose.position.z = avg
+        self.pose.position.z = f(self.pose.position.x, self.pose.position.y)
 
         #Convert Euler Angles to Quarternion
-        q = tf.transformations.quaternion_from_euler(vehicle_roll, vehicle_pitch, self.vehicle_yaw)
+        q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
 
         #Broadcast vehicle frame which is a child of the world frame
         br = tf.TransformBroadcaster()
@@ -201,10 +166,10 @@ class VehicleBot:
 
         #Publish all messages
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                            self.pose.position.z, x1, y1, grid_z2, q)
+                            self.pose.position.z, q)
 
 
-    def publish_messages(self, x, y, z, x1, y1, grid_z2, q):
+    def publish_messages(self, x, y, z, q):
 
         """
         Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization marker. 
