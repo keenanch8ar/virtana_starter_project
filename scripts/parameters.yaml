@@ -3,7 +3,7 @@ sigma: 0.3
 sigma_filt: 3.5
 length: 5
 width: 5
-resolution: 50
+resolution: 250
 v_length: 0.15
 v_width: 0.15
 x_scale: 5.0

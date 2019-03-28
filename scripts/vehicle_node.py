@@ -90,11 +90,13 @@ class VehicleBot:
         #Create an list and fill the list with x, y values and z the values will be the filtered gaussian noise
         # TODO perform these calculations without for loops
         cloud = []
+        x = np.linspace(0, 5, 250)
+        y = np.linspace(0, 5, 250)
         for i in range(len(self.gaussian_array)):
             for j in range(len(self.gaussian_array[i])):
                 innerlist = []
-                innerlist.append(float(i))
-                innerlist.append(float(j))
+                innerlist.append(x[i])
+                innerlist.append(y[j])
                 innerlist.append(self.gaussian_array[i][j])
                 cloud.append(innerlist)
         return cloud
@@ -149,12 +151,12 @@ class VehicleBot:
         self.pose.position.y += (distance)*sin(self.vehicle_yaw)
         #self.pose.position.z =  self.gaussian_array[int(self.pose.position.x*self.x_scale), int(self.pose.position.y*self.y_scale)]
 
-        x = np.arange(0, 50)
-        y = np.arange(0, 50)
+        x = np.linspace(0, 5, 250)
+        y = np.linspace(0, 5, 250)
 
-        f = interpolate.interp2d(y,x,self.gaussian_array,kind='linear')
+        f = interpolate.interp2d(x,y,self.gaussian_array,kind='cubic') #x represents column coordinates, y represents row coordinates
 
-        self.pose.position.z = f(self.pose.position.x, self.pose.position.y)
+        self.pose.position.z = f(self.pose.position.y, self.pose.position.x)
 
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
