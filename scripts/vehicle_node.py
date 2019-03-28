@@ -46,9 +46,6 @@ class VehicleBot:
         #Filter the array to smoothen the variation of the noise
         self.gaussian_array = gaussian_filter(self.gaussian_array, self.sigma_filt)
         
-        #Create Point Cloud
-        self.cloud = self.create_terrain_map()
-
         #Create Twist variables to store cmd_vel
         self.twist = Twist()
 
@@ -79,27 +76,6 @@ class VehicleBot:
 
         #Keeps program running until interrupted
         rospy.spin()
-
-
-    def create_terrain_map(self):
-
-        """
-        Creates a list of points from an array of gaussian noise given a specified height and width 
-        """
-
-        #Create an list and fill the list with x, y values and z the values will be the filtered gaussian noise
-        # TODO perform these calculations without for loops
-        cloud = []
-        x = np.linspace(0, self.length, self.resolution)
-        y = np.linspace(0, self.width, self.resolution)
-        for i in range(len(self.gaussian_array)):
-            for j in range(len(self.gaussian_array[i])):
-                innerlist = []
-                innerlist.append(x[i])
-                innerlist.append(y[j])
-                innerlist.append(self.gaussian_array[i][j])
-                cloud.append(innerlist)
-        return cloud
 
     def velocity_cmd_callback(self, data):
         
@@ -150,17 +126,33 @@ class VehicleBot:
         self.pose.position.x += (distance)*cos(self.vehicle_yaw)
         self.pose.position.y += (distance)*sin(self.vehicle_yaw)
 
-        #Calculate z position using linear interpolation
+        ##########Calculate z position using linear interpolation and create cloud array########
+        
+        #Create range to be used in interpolation function
         x = np.linspace(0, self.length, self.resolution)
         y = np.linspace(0, self.width, self.resolution)
 
-        f = interpolate.interp2d(x,y,self.gaussian_array,kind='cubic') #x represents column coordinates, y represents row coordinates
+        #Create cloud array to be converted to point cloud
+        cloud = []
+        for i in range(len(self.gaussian_array)):
+            for j in range(len(self.gaussian_array[i])):
+                innerlist = []
+                innerlist.append(x[i])
+                innerlist.append(y[j])
+                innerlist.append(self.gaussian_array[i][j])
+                cloud.append(innerlist)
 
+        #Create interpolation function based on the ranges and gaussian data
+        f = interpolate.interp2d(x,y,self.gaussian_array,kind='linear') #x represents column coordinates, y represents row coordinates
+
+        #Create the footprint for the vehicle
         x1 = np.linspace((self.pose.position.x-self.vehicle_length), (self.pose.position.x+self.vehicle_length),5)
         y1 = np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width),5)
 
+        #Interpolate z values for points in the footprint of the vehicle
         z = f(y1, x1)
-
+        
+        #Calculate the average of the points in the footprint and assign it to the z position of the vehicle.
         flat_list = []
 
         for sublist in z:
@@ -170,8 +162,6 @@ class VehicleBot:
         avg = sum(flat_list)/len(flat_list)
 
         self.pose.position.z = avg
-
-        print(self.pose.position.x, self.pose.position.y, self.pose.position.z)
 
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
@@ -183,10 +173,10 @@ class VehicleBot:
 
         #Publish all messages
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                            self.pose.position.z, q)
+                            self.pose.position.z, q, cloud)
 
 
-    def publish_messages(self, x, y, z, q):
+    def publish_messages(self, x, y, z, q, cloud):
 
         """
         Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization marker. 
@@ -237,7 +227,7 @@ class VehicleBot:
         header = Header()
         header.stamp = rospy.Time.now()
         header.frame_id = 'map'
-        point_cloud = pcl2.create_cloud_xyz32(header, self.cloud)
+        point_cloud = pcl2.create_cloud_xyz32(header, cloud)
 
         ##################################################################################
 
