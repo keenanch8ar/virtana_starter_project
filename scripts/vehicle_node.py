@@ -156,8 +156,21 @@ class VehicleBot:
 
         f = interpolate.interp2d(x,y,self.gaussian_array,kind='cubic') #x represents column coordinates, y represents row coordinates
 
-        self.pose.position.z = f(self.pose.position.y, self.pose.position.x)
+        #self.pose.position.z = f(self.pose.position.y, self.pose.position.x)
+        x1 = np.linspace((self.pose.position.x-self.vehicle_length), (self.pose.position.x+self.vehicle_length),5)
+        y1 = np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width),5)
 
+        z = f(y1, x1)
+
+        flat_list = []
+
+        for sublist in z:
+            for item in sublist:
+                flat_list.append(item)
+        
+        avg = sum(flat_list)/len(flat_list)
+
+        self.pose.position.z = avg
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
 
