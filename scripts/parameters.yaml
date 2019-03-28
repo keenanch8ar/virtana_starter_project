@@ -4,8 +4,8 @@ sigma_filt: 3.5
 length: 5
 width: 5
 resolution: 250
-v_length: 0.01
-v_width: 0.01
+v_length: 0.02
+v_width: 0.02
 x_scale: 5.0
 y_scale: 5.0
 

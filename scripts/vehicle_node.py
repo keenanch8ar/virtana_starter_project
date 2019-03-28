@@ -90,8 +90,8 @@ class VehicleBot:
         #Create an list and fill the list with x, y values and z the values will be the filtered gaussian noise
         # TODO perform these calculations without for loops
         cloud = []
-        x = np.linspace(0, 5, 250)
-        y = np.linspace(0, 5, 250)
+        x = np.linspace(0, self.length, self.resolution)
+        y = np.linspace(0, self.width, self.resolution)
         for i in range(len(self.gaussian_array)):
             for j in range(len(self.gaussian_array[i])):
                 innerlist = []
@@ -149,14 +149,13 @@ class VehicleBot:
         # TODO recalculate the position based on traveling in a circular arc.
         self.pose.position.x += (distance)*cos(self.vehicle_yaw)
         self.pose.position.y += (distance)*sin(self.vehicle_yaw)
-        #self.pose.position.z =  self.gaussian_array[int(self.pose.position.x*self.x_scale), int(self.pose.position.y*self.y_scale)]
 
-        x = np.linspace(0, 5, 250)
-        y = np.linspace(0, 5, 250)
+        #Calculate z position using linear interpolation
+        x = np.linspace(0, self.length, self.resolution)
+        y = np.linspace(0, self.width, self.resolution)
 
         f = interpolate.interp2d(x,y,self.gaussian_array,kind='cubic') #x represents column coordinates, y represents row coordinates
 
-        #self.pose.position.z = f(self.pose.position.y, self.pose.position.x)
         x1 = np.linspace((self.pose.position.x-self.vehicle_length), (self.pose.position.x+self.vehicle_length),5)
         y1 = np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width),5)
 
@@ -171,6 +170,9 @@ class VehicleBot:
         avg = sum(flat_list)/len(flat_list)
 
         self.pose.position.z = avg
+
+        print(self.pose.position.x, self.pose.position.y, self.pose.position.z)
+
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
 
@@ -248,8 +250,8 @@ class VehicleBot:
         viz_points.action = viz_points.ADD
         viz_points.type = viz_points.CUBE
 
-        viz_points.scale.x = 0.2
-        viz_points.scale.y = 0.2
+        viz_points.scale.x = 0.1
+        viz_points.scale.y = 0.1
         viz_points.scale.z = 0.001
 
         viz_points.pose.position.x = x
