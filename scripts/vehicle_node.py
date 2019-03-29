@@ -13,9 +13,8 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
 from scipy.interpolate import griddata
 from visualization_msgs.msg import Marker
-from scipy import interpolate
 from scipy.interpolate import RectBivariateSpline
-from scipy.interpolate import RegularGridInterpolator
+
 
 
 
@@ -37,14 +36,8 @@ class VehicleBot:
         self.x_scale = rospy.get_param('/x_scale')
         self.y_scale = rospy.get_param('/y_scale')
 
-        #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
-        h = self.resolution
-        w = self.resolution
-        grid_map = (h,w)
-        self.gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
-
-        #Filter the array to smoothen the variation of the noise
-        self.gaussian_array = gaussian_filter(self.gaussian_array, self.sigma_filt)
+        #Create Gaussian Array of noise
+        self.gaussian_array = self.create_gaussian_array()
         
         #Create Twist variables to store cmd_vel
         self.twist = Twist()
@@ -76,6 +69,19 @@ class VehicleBot:
 
         #Keeps program running until interrupted
         rospy.spin()
+
+    def create_gaussian_array(self):
+
+        #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
+        h = self.resolution
+        w = self.resolution
+        grid_map = (h,w)
+        gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
+
+        #Filter the array to smoothen the variation of the noise
+        gaussian_array = gaussian_filter(gaussian_array, self.sigma_filt)
+
+        return gaussian_array
 
     def velocity_cmd_callback(self, data):
         
@@ -143,14 +149,14 @@ class VehicleBot:
                 cloud.append(innerlist)
 
         #Create interpolation function based on the ranges and gaussian data
-        f = interpolate.interp2d(x,y,self.gaussian_array,kind='linear') #x represents column coordinates, y represents row coordinates
+        f = RectBivariateSpline(x,y, self.gaussian_array)
 
         #Create the footprint for the vehicle
         x1 = np.linspace((self.pose.position.x-self.vehicle_length), (self.pose.position.x+self.vehicle_length),5)
         y1 = np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width),5)
 
         #Interpolate z values for points in the footprint of the vehicle
-        z = f(y1, x1)
+        z = f(x1, y1)
         
         #Calculate the average of the points in the footprint and assign it to the z position of the vehicle.
         flat_list = []
