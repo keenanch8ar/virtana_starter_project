@@ -73,8 +73,8 @@ class VehicleBot:
         """
 
         #Fill array of size l x w with Gaussian Noise.
-        l = int(self.length/self.resolution)
-        w = int(self.width/self.resolution)
+        l = int(ceil(self.length/self.resolution))
+        w = int(ceil(self.width/self.resolution))
         grid_map = (l,w)
         gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
 
@@ -135,8 +135,8 @@ class VehicleBot:
         ##########Calculate z position using linear interpolation and create cloud array########
         
         #Create range to be used in interpolation function
-        x = np.linspace(0, self.length, int(self.length/self.resolution))
-        y = np.linspace(0, self.width, int(self.width/self.resolution))
+        x = np.arange(0, self.length, self.resolution)
+        y = np.arange(0, self.width, self.resolution)
 
         #Create cloud array to be converted to point cloud 
         #TODO do this without for loops
@@ -161,7 +161,7 @@ class VehicleBot:
         
         #Calculate the average of the points in the footprint and assign it to the z position of the vehicle.
 
-        avg = sum(sum(z))/(len(z)*len(z[0]))
+        avg = np.sum(z)/(len(z)*len(z[0]))
 
         self.pose.position.z = avg
 
