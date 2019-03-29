@@ -11,11 +11,8 @@ from numpy import sin, cos
 from geometry_msgs.msg import Twist, PoseStamped, Pose, Point
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
-from scipy.interpolate import griddata
 from visualization_msgs.msg import Marker
 from scipy.interpolate import RectBivariateSpline
-
-
 
 
 class VehicleBot:
@@ -24,19 +21,17 @@ class VehicleBot:
 
         rospy.init_node('vehicle_node', anonymous=True)
         
-        #Load parameters to be used in node
+        #Load parameters to be used in node. Description of each in parameters yaml file.
         self.mu = rospy.get_param('/mu')
         self.sigma = rospy.get_param('/sigma')
-        self.sigma_filt = rospy.get_param('/sigma_filt')
+        self.sigma_filter = rospy.get_param('/sigma_filter')
         self.length = rospy.get_param('/length')
         self.width = rospy.get_param('/width')
         self.resolution =  rospy.get_param('/resolution')
         self.vehicle_length =  rospy.get_param('/v_length')
         self.vehicle_width =  rospy.get_param('/v_width')
-        self.x_scale = rospy.get_param('/x_scale')
-        self.y_scale = rospy.get_param('/y_scale')
 
-        #Create Gaussian Array of noise
+        #Create Gaussian Array of normally distributed noise
         self.gaussian_array = self.create_gaussian_array()
         
         #Create Twist variables to store cmd_vel
@@ -72,14 +67,19 @@ class VehicleBot:
 
     def create_gaussian_array(self):
 
-        #Fill array of size h x w with Gaussian Noise given the height and width of the point cloud
-        h = self.resolution
-        w = self.resolution
-        grid_map = (h,w)
+        """
+        Creates an array filled with gaussian noise using the parameters loaded
+        from the parameter server.
+        """
+
+        #Fill array of size l x w with Gaussian Noise.
+        l = int(self.length/self.resolution)
+        w = int(self.width/self.resolution)
+        grid_map = (l,w)
         gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
 
         #Filter the array to smoothen the variation of the noise
-        gaussian_array = gaussian_filter(gaussian_array, self.sigma_filt)
+        gaussian_array = gaussian_filter(gaussian_array, self.sigma_filter)
 
         return gaussian_array
 
@@ -88,6 +88,7 @@ class VehicleBot:
         """
         Updates the most recent command velocity to a twist variable
         """
+
         self.lock.acquire()
         try:
             self.twist = data
@@ -98,7 +99,7 @@ class VehicleBot:
     def update_position(self, event):
 
         """
-        Computes the pose of the vehicle within a given footprint height and width 
+        Computes the pose of the vehicle in the terrian map. 
         """
 
         #Create a copy of the most recent stored twist data to perform calculations with
@@ -118,7 +119,6 @@ class VehicleBot:
         time = time.to_sec()
 
         #Calculate angle turned in the given time using omega = theta/time
-        #TODO Currently it yaws, then moves forward. Revist calculation to do both simultaneously
         angle = velocity_data.angular.z*time
 
         #Calculate distance travelled in the given time using linear velocity = arc distance/time
@@ -135,10 +135,11 @@ class VehicleBot:
         ##########Calculate z position using linear interpolation and create cloud array########
         
         #Create range to be used in interpolation function
-        x = np.linspace(0, self.length, self.resolution)
-        y = np.linspace(0, self.width, self.resolution)
+        x = np.linspace(0, self.length, int(self.length/self.resolution))
+        y = np.linspace(0, self.width, int(self.width/self.resolution))
 
-        #Create cloud array to be converted to point cloud
+        #Create cloud array to be converted to point cloud 
+        #TODO do this without for loops
         cloud = []
         for i in range(len(self.gaussian_array)):
             for j in range(len(self.gaussian_array[i])):
@@ -159,13 +160,8 @@ class VehicleBot:
         z = f(x1, y1)
         
         #Calculate the average of the points in the footprint and assign it to the z position of the vehicle.
-        flat_list = []
 
-        for sublist in z:
-            for item in sublist:
-                flat_list.append(item)
-        
-        avg = sum(flat_list)/len(flat_list)
+        avg = sum(sum(z))/(len(z)*len(z[0]))
 
         self.pose.position.z = avg
 

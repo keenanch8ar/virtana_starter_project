@@ -1,12 +1,10 @@
 mu: 0.0
 sigma: 0.3
-sigma_filt: 3.5
-length: 5
-width: 5
-resolution: 250
-v_length: 0.02
-v_width: 0.02
-x_scale: 5.0
-y_scale: 5.0
+sigma_filter: 3.5
+length: 5.0 # length of the terrain in meters, m
+width: 5.0 # width of terrain in meters, m
+resolution: 0.02 # size of singke terrain grid cell in meters per cell,  m/cell
+v_length: 0.02 # vehicle length in meters, m
+v_width: 0.02 # vehicle width in meters, m
 
 
