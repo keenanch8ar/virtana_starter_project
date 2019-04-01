@@ -2,7 +2,7 @@
 
     <group ns="vehicle1">
         <node pkg="virtana_starter_project" name="vehicle" type="vehicle_node.py">
-            <rosparam command="load" file="$(find rosparam)/parameters.yaml" />
+            <rosparam command="load" file="$(find virtana_starter_project)/scripts/parameters.yaml" />
         </node>
     </group>
 

@@ -13,6 +13,7 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
 from visualization_msgs.msg import Marker
 from scipy.interpolate import RectBivariateSpline
+from scipy import interpolate
 
 
 class VehicleBot:
@@ -22,6 +23,7 @@ class VehicleBot:
         rospy.init_node('vehicle_node', anonymous=True)
         
         #Load parameters to be used in node. Description of each in parameters yaml file.
+        #TODO use a common namespace and pull the entire dictionary into constructor
         self.mu = rospy.get_param('/mu')
         self.sigma = rospy.get_param('/sigma')
         self.sigma_filter = rospy.get_param('/sigma_filter')
@@ -61,6 +63,10 @@ class VehicleBot:
 
         #Publisher for Vehicle Marker
         self.grid_publisher = rospy.Publisher('/grid_marker', Marker, queue_size=1)
+
+        self.br = tf.TransformBroadcaster()
+
+        self.li = tf.TransformListener()
 
         #Keeps program running until interrupted
         rospy.spin()
@@ -148,34 +154,44 @@ class VehicleBot:
         f = RectBivariateSpline(x,y, self.gaussian_array)
 
         #Create the footprint for the vehicle
+        #TODO implement footprint that changed with yaw of vehicle
         x1 = np.linspace((self.pose.position.x-self.vehicle_length), 
-                        (self.pose.position.x+self.vehicle_length),5)
+                        (self.pose.position.x+self.vehicle_length),15)
         y1 = np.linspace((self.pose.position.y-self.vehicle_width), 
-                        (self.pose.position.y+self.vehicle_width),5)
+                        (self.pose.position.y+self.vehicle_width),15)
+
+        x1, y1 = np.meshgrid(x1, y1)
+        x1 = x1.ravel()
+        y1 = y1.ravel()
 
         #Interpolate z values for points in the footprint of the vehicle
-        z = f(x1, y1)
-        
+        z_points = f(x1, y1, grid = False)
+
         #Calculate the average of the points in the footprint and assign it to the z position of the vehicle.
 
-        avg = np.sum(z)/(len(z)*len(z[0]))
-
+        avg = np.sum(z_points)/len(z_points)
+        
         self.pose.position.z = avg
 
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
 
         #Broadcast vehicle frame which is a child of the world frame
-        br = tf.TransformBroadcaster()
-        br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z), 
+
+        self.br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z), 
                         q, rospy.Time.now(),"vehicle_frame", "map")
+
+        point = [self.pose.position.x, self.pose.position.y, self.pose.position.z]
+        trans1_mat = tf.transformations.translation_matrix(point)
+        rot1_mat   = tf.transformations.quaternion_matrix(q)
+        mat1 = np.dot(trans1_mat, rot1_mat)
 
         #Publish all messages
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                            self.pose.position.z, q, cloud)
+                            self.pose.position.z, q, cloud,x1, y1,z_points,mat1)
 
 
-    def publish_messages(self, x, y, z, q, cloud):
+    def publish_messages(self, x, y, z, q, cloud,x1, y1,z_points, mat1):
 
         """
         Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization marker. 
@@ -231,33 +247,63 @@ class VehicleBot:
         ##################################################################################
 
         #Create a marker to vizualize the footprint of the vehicle
+        # viz_points = Marker()
+        # viz_points.header.frame_id = "map"
+        # viz_points.header.stamp = rospy.Time.now()
+        # viz_points.ns = "marker"
+        # viz_points.id = 1
+        # viz_points.action = viz_points.ADD
+        # viz_points.type = viz_points.CUBE
+
+        # viz_points.scale.x = 0.1
+        # viz_points.scale.y = 0.1
+        # viz_points.scale.z = 0.001
+
+        # viz_points.pose.position.x = x
+        # viz_points.pose.position.y = y
+        # viz_points.pose.position.z = z
+        # viz_points.pose.orientation.x = q[0]
+        # viz_points.pose.orientation.y = q[1]
+        # viz_points.pose.orientation.z = q[2]
+        # viz_points.pose.orientation.w = q[3]
+
+        # viz_points.color.a = 1.0
+        # viz_points.color.r = 1.0
+        # viz_points.color.g = 0.0
+        # viz_points.color.b = 0.0
+
+        ##################################################################################
+        #Create a marker to vizualize the footprint of the vehicle
         viz_points = Marker()
         viz_points.header.frame_id = "map"
         viz_points.header.stamp = rospy.Time.now()
-        viz_points.ns = "marker"
+        viz_points.ns = "grid_marker"
         viz_points.id = 1
         viz_points.action = viz_points.ADD
-        viz_points.type = viz_points.CUBE
+        viz_points.type = viz_points.CUBE_LIST
 
-        viz_points.scale.x = 0.1
-        viz_points.scale.y = 0.1
-        viz_points.scale.z = 0.001
-
-        viz_points.pose.position.x = x
-        viz_points.pose.position.y = y
-        viz_points.pose.position.z = z
-        viz_points.pose.orientation.x = q[0]
-        viz_points.pose.orientation.y = q[1]
-        viz_points.pose.orientation.z = q[2]
-        viz_points.pose.orientation.w = q[3]
+        viz_points.scale.x = 0.01
+        viz_points.scale.y = 0.01
+        viz_points.scale.z = 0.01
 
         viz_points.color.a = 1.0
         viz_points.color.r = 1.0
         viz_points.color.g = 0.0
         viz_points.color.b = 0.0
 
-        ##################################################################################
-
+        for i in range(z_points.shape[0]):
+            p = Point()
+            z = []
+            z.append(x1[i])
+            z.append(y1[i])
+            z.append(z_points[i])
+            z.append(0.0)
+            z = np.matmul(mat1,z)
+            p.x = z[0]
+            p.y = z[1]
+            p.z = z[2]
+            viz_points.points.append(p)
+        
         #Publish pose, vizualization, array information and point cloud
         self.pose_publisher.publish(msg)
         self.pose_array_publisher.publish(array_msg)
