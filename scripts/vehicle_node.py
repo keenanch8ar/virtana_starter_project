@@ -88,12 +88,9 @@ class VehicleBot:
         """
         Updates the most recent command velocity to a twist variable
         """
-
-        self.lock.acquire()
-        try:
+        with self.lock:
             self.twist = data
-        finally:
-            self.lock.release()
+
 
 
     def update_position(self, event):
@@ -103,11 +100,9 @@ class VehicleBot:
         """
 
         #Create a copy of the most recent stored twist data to perform calculations with
-        self.lock.acquire()
-        try:
+        with self.lock:
             velocity_data = copy.deepcopy(self.twist)
-        finally:
-            self.lock.release()
+
 
         #time elapsed since last update position call
         if hasattr(event, 'last_real'):
@@ -135,14 +130,14 @@ class VehicleBot:
         ##########Calculate z position using linear interpolation and create cloud array########
         
         #Create range to be used in interpolation function
-        x = np.arange(0, self.length, self.resolution)
-        y = np.arange(0, self.width, self.resolution)
+        x = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
+        y = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
 
         #Create cloud array to be converted to point cloud 
         #TODO do this without for loops
         cloud = []
-        for i in range(len(self.gaussian_array)):
-            for j in range(len(self.gaussian_array[i])):
+        for i in range(self.gaussian_array.shape[0]):
+            for j in range(self.gaussian_array.shape[1]):
                 innerlist = []
                 innerlist.append(x[i])
                 innerlist.append(y[j])
@@ -153,8 +148,10 @@ class VehicleBot:
         f = RectBivariateSpline(x,y, self.gaussian_array)
 
         #Create the footprint for the vehicle
-        x1 = np.linspace((self.pose.position.x-self.vehicle_length), (self.pose.position.x+self.vehicle_length),5)
-        y1 = np.linspace((self.pose.position.y-self.vehicle_width), (self.pose.position.y+self.vehicle_width),5)
+        x1 = np.linspace((self.pose.position.x-self.vehicle_length), 
+                        (self.pose.position.x+self.vehicle_length),5)
+        y1 = np.linspace((self.pose.position.y-self.vehicle_width), 
+                        (self.pose.position.y+self.vehicle_width),5)
 
         #Interpolate z values for points in the footprint of the vehicle
         z = f(x1, y1)
@@ -275,4 +272,8 @@ if __name__ == '__main__':
         pass
 
 
-        
+
+
+
+
+

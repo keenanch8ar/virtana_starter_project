@@ -1,9 +1,9 @@
 mu: 0.0
 sigma: 0.3
 sigma_filter: 3.5
-length: 4.5 # length of the terrain in meters, m
-width: 3.0 # width of terrain in meters, m
-resolution: 0.1 # size of single terrain grid cell in meters per cell,  m/cell
+length: 5.5 # length of the terrain in meters, m
+width: 4.5 # width of terrain in meters, m
+resolution: 0.025 # size of single terrain grid cell in meters per cell,  m/cell
 v_length: 0.02 # vehicle length in meters, m
 v_width: 0.02 # vehicle width in meters, m
 
