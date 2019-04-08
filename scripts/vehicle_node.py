@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+
+"""
+Creates a simulated bulldozer vehicle that is capable of traversing over rugged terrain. 
+The terrain parameters can be adjusted in the parameters.yaml file.
+"""
 import rospy
 import tf
 from math import ceil
@@ -13,8 +18,6 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
 from visualization_msgs.msg import Marker
 from scipy.interpolate import RectBivariateSpline
-from scipy import interpolate
-
 
 class VehicleBot:
 
@@ -58,15 +61,11 @@ class VehicleBot:
         #Publisher for a Float32MultiArray() Message
         self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=1)
 
-        #Publisher for PointCloud2 terrain map
+        #Latched Publisher for PointCloud2 terrain map
         self.point_cloud_publisher = rospy.Publisher("/point_cloud", PointCloud2, latch = True, queue_size=1)
 
         #Publisher for Vehicle Marker
         self.grid_publisher = rospy.Publisher('/grid_marker', Marker, queue_size=1)
-
-        self.br = tf.TransformBroadcaster()
-
-        self.li = tf.TransformListener()
 
         #Keeps program running until interrupted
         rospy.spin()
@@ -105,7 +104,7 @@ class VehicleBot:
         Computes the pose of the vehicle in the terrian map. 
         """
 
-        #Create a copy of the most recent stored twist data to perform calculations with
+        #Create a copy of the most recent stored twist data to perform calculations
         with self.lock:
             velocity_data = copy.deepcopy(self.twist)
 
@@ -133,13 +132,13 @@ class VehicleBot:
         self.pose.position.x += (distance)*cos(self.vehicle_yaw)
         self.pose.position.y += (distance)*sin(self.vehicle_yaw)
 
-        ##########Calculate z position using linear interpolation and create cloud array########
+        #Calculate z position using linear interpolation and create cloud array
         
-        #Create range to be used in interpolation function
+        #1. Create range to be used in interpolation function
         x = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
         y = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
 
-        #Create cloud array to be converted to point cloud 
+        #2. Create cloud array to be converted to point cloud for vizualization
         #TODO do this without for loops
         cloud = []
         for i in range(self.gaussian_array.shape[0]):
@@ -150,54 +149,61 @@ class VehicleBot:
                 innerlist.append(self.gaussian_array[i][j])
                 cloud.append(innerlist)
 
-        #Create interpolation function based on the ranges and gaussian data
+        #3. Create interpolation function based on the ranges and gaussian data
         f = RectBivariateSpline(x,y, self.gaussian_array)
 
-        #Create the footprint for the vehicle
-        #TODO implement footprint that changed with yaw of vehicle
-        x1 = np.linspace((self.pose.position.x-self.vehicle_length), 
-                        (self.pose.position.x+self.vehicle_length),15)
-        y1 = np.linspace((self.pose.position.y-self.vehicle_width), 
-                        (self.pose.position.y+self.vehicle_width),15)
-
-        x1, y1 = np.meshgrid(x1, y1)
-        x1 = x1.ravel()
-        y1 = y1.ravel()
-
-        #Interpolate z values for points in the footprint of the vehicle
-        z_points = f(x1, y1, grid = False)
-
-        #Calculate the average of the points in the footprint and assign it to the z position of the vehicle.
-
-        avg = np.sum(z_points)/len(z_points)
-        
-        self.pose.position.z = avg
+        #4. Find z value for x and y coordinate of vehicle using interpolation function
+        self.pose.position.z = f(self.pose.position.x, self.pose.position.y)
 
         #Convert Euler Angles to Quarternion
         q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
 
         #Broadcast vehicle frame which is a child of the world frame
-
-        self.br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z), 
+        br = tf.TransformBroadcaster()
+        br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z), 
                         q, rospy.Time.now(),"vehicle_frame", "map")
 
-        point = [self.pose.position.x, self.pose.position.y, self.pose.position.z]
-        trans1_mat = tf.transformations.translation_matrix(point)
-        rot1_mat   = tf.transformations.quaternion_matrix(q)
-        mat1 = np.dot(trans1_mat, rot1_mat)
+        #Construct the homogenous transformation matrix for map to vehicle frame
+        translation = [self.pose.position.x, self.pose.position.y, self.pose.position.z]
+        map_t_vehicle = tf.transformations.translation_matrix(translation)
+        map_R_vehicle   = tf.transformations.quaternion_matrix(q)
+        map_T_vehicle = np.zeros((4,4))
+        map_T_vehicle[0:3,0:3] = map_R_vehicle[0:3,0:3]
+        map_T_vehicle[:4,3] = map_t_vehicle[:4,3]
+
+        #Create footprint of vehicle
+        x1 = np.linspace((-self.vehicle_length), (self.vehicle_length),30)
+        y1 = np.linspace((-self.vehicle_width), (self.vehicle_width),15)
+        x1, y1 = np.meshgrid(x1, y1)
+        x1 = x1.ravel()
+        y1 = y1.ravel()
+
+        #For every point in the vehicle footprint, calculate the position wrt to the vehicle's frame
+        # and its interpolated z value. Add this point to a list of points for visualization.
+        points = []
+        for i in range(x1.shape[0]):
+            p = Point()
+            footprint = np.array([[x1[i]],[y1[i]],[0.0],[1.0]])
+            footprint = np.matmul(map_T_vehicle, footprint)
+            footprint[2,0] =  f(footprint[0,0], footprint[1,0])
+            p.x = footprint[0,0]
+            p.y = footprint[1,0]
+            p.z = footprint[2,0]
+            points.append(p)
 
         #Publish all messages
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                            self.pose.position.z, q, cloud,x1, y1,z_points,mat1)
+                            self.pose.position.z, q, cloud, points)
 
 
-    def publish_messages(self, x, y, z, q, cloud,x1, y1,z_points, mat1):
+    def publish_messages(self, x, y, z, q, cloud, points):
 
         """
-        Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization marker. 
+        Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization
+        marker. 
         """
 
-        #####################################################################################
+        ##################################################################################
 
         #Create a posestamped message containing position information
 
@@ -247,33 +253,6 @@ class VehicleBot:
         ##################################################################################
 
         #Create a marker to vizualize the footprint of the vehicle
-        # viz_points = Marker()
-        # viz_points.header.frame_id = "map"
-        # viz_points.header.stamp = rospy.Time.now()
-        # viz_points.ns = "marker"
-        # viz_points.id = 1
-        # viz_points.action = viz_points.ADD
-        # viz_points.type = viz_points.CUBE
-
-        # viz_points.scale.x = 0.1
-        # viz_points.scale.y = 0.1
-        # viz_points.scale.z = 0.001
-
-        # viz_points.pose.position.x = x
-        # viz_points.pose.position.y = y
-        # viz_points.pose.position.z = z
-        # viz_points.pose.orientation.x = q[0]
-        # viz_points.pose.orientation.y = q[1]
-        # viz_points.pose.orientation.z = q[2]
-        # viz_points.pose.orientation.w = q[3]
-
-        # viz_points.color.a = 1.0
-        # viz_points.color.r = 1.0
-        # viz_points.color.g = 0.0
-        # viz_points.color.b = 0.0
-
-        ##################################################################################
-        #Create a marker to vizualize the footprint of the vehicle
         viz_points = Marker()
         viz_points.header.frame_id = "map"
         viz_points.header.stamp = rospy.Time.now()
@@ -290,19 +269,7 @@ class VehicleBot:
         viz_points.color.r = 1.0
         viz_points.color.g = 0.0
         viz_points.color.b = 0.0
-
-        for i in range(z_points.shape[0]):
-            p = Point()
-            z = []
-            z.append(x1[i])
-            z.append(y1[i])
-            z.append(z_points[i])
-            z.append(0.0)
-            z = np.matmul(mat1,z)
-            p.x = z[0]
-            p.y = z[1]
-            p.z = z[2]
-            viz_points.points.append(p)
+        viz_points.points = points
         
         #Publish pose, vizualization, array information and point cloud
         self.pose_publisher.publish(msg)
