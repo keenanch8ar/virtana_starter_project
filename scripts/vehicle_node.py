@@ -19,22 +19,14 @@ from sensor_msgs.msg import PointCloud2, JointState
 from visualization_msgs.msg import Marker
 from scipy.interpolate import RectBivariateSpline
 
-class VehicleBot:
+class VehicleBot(object):
 
     def __init__(self):
 
         rospy.init_node('vehicle_node', anonymous=True)
         
         #Load parameters to be used in node. Description of each in parameters yaml file.
-        #TODO use a common namespace and pull the entire dictionary into constructor
-        self.mu = rospy.get_param('/mu')
-        self.sigma = rospy.get_param('/sigma')
-        self.sigma_filter = rospy.get_param('/sigma_filter')
-        self.length = rospy.get_param('/length')
-        self.width = rospy.get_param('/width')
-        self.resolution =  rospy.get_param('/resolution')
-        self.vehicle_length =  rospy.get_param('/v_length')
-        self.vehicle_width =  rospy.get_param('/v_width')
+        self.__dict__.update(rospy.get_param('/map_params'))
 
         #Create Gaussian Array of normally distributed noise
         self.gaussian_array = self.create_gaussian_array()
