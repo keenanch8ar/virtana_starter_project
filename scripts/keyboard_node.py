@@ -2,21 +2,23 @@
 import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Header
 import sys, select, termios, tty
 
 msg = """
-Reading from the keyboard  and Publishing to Twist!
+Reading from the keyboard  and Publishing to JointState!
 ---------------------------
-Moving vehicle joint:
-    t: up   (+z)
-    g: stop (0)
-    b: down (-z)
+Moving vehicle joint 1 & 2:
+Joint 1:                Joint 2:
+    t: up   (+z)            y: rotate up (+z)
+    g: stop (0)             h: stop (0)
+    b: down (-z)            n: rotate down (-z)
 
 CTRL-C to quit
 """
 
-moveBindings1 = {'t':(0,0,1,1),'g':(0,0,0,0), 'b':(0,0,-1,-1),}
-moveBindings2 = {'y':(0,0,0,1),'h':(0,0,0,0), 'n':(0,0,0,-1),}
+moveBindings1 = {'t':1.0,'g':0.0, 'b':-1.0}
+moveBindings2 = {'y':1.0,'h':0.0, 'n':-1.0}
 
 
 
@@ -31,51 +33,48 @@ def getKey():
 if __name__ == '__main__':
     settings = termios.tcgetattr(sys.stdin)
 
-    key_pub = rospy.Publisher('/keyboard_cmd_vel', Twist, queue_size = 1)
+    key_pub = rospy.Publisher('/keyboard/joints', JointState, queue_size = 1)
     rospy.init_node('keyboard_node', anonymous=True)
 
-    x = 0
-    y = 0
-    z = 0
-    th = 0
-    speed = 0.3
+    vel1 = 0.0
+    vel2 = 0.0
+    speed = 0.5
     turn = 1.0
     try:
         print(msg)
-        rate = rospy.Rate(10)
+        joint = JointState()
+        joint.header = Header()
+        joint.name = ['joint1','joint2']
+        joint.position = []
+        joint.effort = []
         while not rospy.is_shutdown():
+
             key = getKey()
             if key in moveBindings1.keys():
-                x = moveBindings1[key][0]
-                y = moveBindings1[key][1]
-                z = moveBindings1[key][2]
-                th = moveBindings1[key][3]
+                vel1 = moveBindings1[key]
+            elif key in moveBindings2.keys():
+                vel2 = moveBindings2[key]
             else:
-                x = 0
-                y = 0
-                z = 0
-                th = 0
+                vel1 = 0.0
+                vel2 = 0.0
                 if (key == '\x03'):
                     break
-            
-            twist = Twist()
-            twist.linear.x = x*speed
-            twist.linear.y = y*speed
-            twist.linear.z = z*speed
-            twist.angular.x = 0
-            twist.angular.y = th*turn
-            twist.angular.z = 0
-            key_pub.publish(twist)
-    
+
+            joint.header.stamp = rospy.Time.now()
+            joint.velocity = [vel1*speed,vel2*speed]
+            key_pub.publish(joint)
+
     except Exception as e:
         print(e)
         
     finally:
-        twist = Twist()
-        twist.linear.x = 0; twist.linear.y = 0; twist.linear.z = 0
-        twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
-        key_pub.publish(twist)
 
+        joint = JointState()
+        joint.header = Header()
+        joint.name = ['joint1', 'joint2']
+        joint.position = []
+        joint.effort = []
+        joint.header.stamp = rospy.Time.now()
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
 

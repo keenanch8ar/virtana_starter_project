@@ -34,7 +34,7 @@ class VehicleBot(object):
         
         #Create Twist variables to store cmd_vel
         self.twist = Twist()
-        self.joint_twist = Twist()
+        self.joint = JointState()
 
         #Create variables for calculations
         self.vehicle_yaw = 0.0
@@ -58,7 +58,7 @@ class VehicleBot(object):
         rospy.Subscriber("/turtlebot_teleop/cmd_vel", Twist, self.velocity_cmd_callback)
 
         #Subscriber for joint teleop key
-        rospy.Subscriber("/keyboard_cmd_vel", Twist, self.joint_cmd_callback)
+        rospy.Subscriber("/keyboard/joints", JointState, self.joint_cmd_callback)
 
         #Publisher for PoseStamped() Message
         self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=1)
@@ -107,7 +107,7 @@ class VehicleBot(object):
     def joint_cmd_callback(self, data):
 
         with self.joint_lock:
-            self.joint_twist = data
+            self.joint = data
 
     def update_position(self, event):
 
@@ -209,7 +209,7 @@ class VehicleBot(object):
 
         #Create a copy of the most recent stored twist data to perform calculations
         with self.joint_lock:
-            joint_velocity_data = copy.deepcopy(self.joint_twist)
+            joint_data = copy.deepcopy(self.joint)
 
         #time elapsed since last update position call
         if hasattr(event, 'last_real'):
@@ -220,21 +220,17 @@ class VehicleBot(object):
         
         time = time.to_sec()
 
-        #Calculate angle turned in the given time using omega = theta/time
-        angle = joint_velocity_data.angular.y*time
+        if not joint_data.velocity:
+            joint_data.velocity = [0.0,0.0]
+        
 
-        #Calculate distance travelled in the given time using linear velocity = arc distance/time
-        distance = joint_velocity_data.linear.z*time
+        angle = joint_data.velocity[0]*time
 
-        #Calculate pitch of the robot joint
         self.joint_pitch += angle
 
-        #Calculate vehicle x, y, z position coordinates
-        self.joint_pose.position.z += (distance)*cos(self.joint_pitch)
-
-        br = tf.TransformBroadcaster()
         q2 = tf.transformations.quaternion_from_euler(0.0, self.joint_pitch, -3.14159)
 
+        br = tf.TransformBroadcaster()
         br.sendTransform((-0.15, 0.0, 0.0), 
                         q2, 
                         rospy.Time.now(), 
@@ -242,24 +238,23 @@ class VehicleBot(object):
                         "vehicle_frame")
         
 
-       #Construct the homogenous transformation matrix for vehicle frame to joint1
-        translation =  [-0.15, 0.0, 0.0]
-        map_T_vehicle = tf.transformations.quaternion_matrix(q2) 
-        map_T_vehicle[:3,3] = np.array(translation)
+        #Construct the homogenous transformation matrix for vehicle frame to joint1
+        translation =  [0.0, 0.0, 0.0]
+        vehicle_T_SR = tf.transformations.quaternion_matrix(q2) 
+        vehicle_T_SR[:3,3] = np.array(translation)
 
-
-        vehicle_t_joint1 = tf.transformations.translation_matrix(translation)
-        vehicle_R_joint1   = tf.transformations.quaternion_matrix(q2)
-        vehicle_T_joint1 = np.zeros((4,4))
-        vehicle_T_joint1[0:3,0:3] = vehicle_R_joint1[0:3,0:3]
-        vehicle_T_joint1[:4,3] = vehicle_t_joint1[:4,3]
+        q3 = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
+        translation =  [0.15, 0.0, 0.0]
+        vehicle_T_joint1 = tf.transformations.quaternion_matrix(q3) 
+        vehicle_T_joint1[:3,3] = np.array(translation)
 
         footprint = np.array([[0.0],[0.0],[0.0],[1.0]])
         footprint = np.matmul(vehicle_T_joint1, footprint)
+        footprint = np.matmul(vehicle_T_SR, footprint)
 
         self.joint_pose.position.x = footprint[0,0]
         self.joint_pose.position.y = footprint[1,0]
-        self.joint_pose.position.z = footprint[2]
+        self.joint_pose.position.z = footprint[2,0]
         self.joint_pose.orientation.x = q2[0]
         self.joint_pose.orientation.y = q2[1]
         self.joint_pose.orientation.z = q2[2]
