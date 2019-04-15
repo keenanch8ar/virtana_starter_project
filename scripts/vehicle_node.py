@@ -1,9 +1,5 @@
 #!/usr/bin/env python
 
-"""
-Creates a simulated bulldozer vehicle that is capable of traversing over rugged terrain. 
-The terrain parameters can be adjusted in the parameters.yaml file.
-"""
 import rospy
 import tf
 from math import ceil
@@ -21,6 +17,11 @@ from scipy.interpolate import RectBivariateSpline
 
 class VehicleBot(object):
 
+    """
+    Creates a simulated bulldozer vehicle that is capable of traversing over rugged terrain. 
+    The terrain parameters can be adjusted in the parameters.yaml file.
+    """
+
     def __init__(self):
 
         rospy.init_node('vehicle_node', anonymous=True)
@@ -33,22 +34,37 @@ class VehicleBot(object):
         
         #Create Twist variables to store cmd_vel
         self.twist = Twist()
+        self.joint_twist = Twist()
 
         #Create variables for calculations
         self.vehicle_yaw = 0.0
+        self.joint_pitch = 0.0
         self.pose = Pose()
+        self.joint_pose = Pose()
 
         #Create a lock to prevent race conditions when calculating position
         self.lock = threading.Lock()
 
+        #Create a lock to prevent race conditions when calculating position
+        self.joint_lock = threading.Lock()
+
         #Timer to update pose every 50ms
         rospy.Timer(rospy.Duration(0.05), self.update_position)
 
-        #Subscriber for to teleop key
+        #Timer to update pose every 50ms
+        rospy.Timer(rospy.Duration(0.05), self.update_joint_position)
+
+        #Subscriber for teleop key
         rospy.Subscriber("/turtlebot_teleop/cmd_vel", Twist, self.velocity_cmd_callback)
+
+        #Subscriber for joint teleop key
+        rospy.Subscriber("/keyboard_cmd_vel", Twist, self.joint_cmd_callback)
 
         #Publisher for PoseStamped() Message
         self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=1)
+
+        #Publisher for Joint PoseStamped() Message
+        self.joint_pose_publisher = rospy.Publisher("/move_joint/cmd", PoseStamped, queue_size=1)
 
         #Publisher for a Float32MultiArray() Message
         self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=1)
@@ -88,7 +104,10 @@ class VehicleBot(object):
         with self.lock:
             self.twist = data
 
+    def joint_cmd_callback(self, data):
 
+        with self.joint_lock:
+            self.joint_twist = data
 
     def update_position(self, event):
 
@@ -187,6 +206,72 @@ class VehicleBot(object):
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
                             self.pose.position.z, q, cloud, points)
 
+    def update_joint_position(self, event):
+
+        #Create a copy of the most recent stored twist data to perform calculations
+        with self.joint_lock:
+            joint_velocity_data = copy.deepcopy(self.joint_twist)
+
+        #time elapsed since last update position call
+        if hasattr(event, 'last_real'):
+            if event.last_real is None:
+                time = rospy.Duration(0.05)
+            else:
+                time = event.current_real - event.last_real
+        
+        time = time.to_sec()
+
+        #Calculate angle turned in the given time using omega = theta/time
+        angle = joint_velocity_data.angular.y*time
+
+        #Calculate distance travelled in the given time using linear velocity = arc distance/time
+        distance = joint_velocity_data.linear.z*time
+
+        #Calculate pitch of the robot joint
+        self.joint_pitch += angle
+
+        #Calculate vehicle x, y, z position coordinates
+        self.joint_pose.position.z += (distance)*cos(self.joint_pitch)
+
+        br = tf.TransformBroadcaster()
+        q2 = tf.transformations.quaternion_from_euler(0.0, self.joint_pitch, -3.14159)
+        translation =  [-0.15, 0.0, 0.0]
+
+        br.sendTransform((-0.15, 0.0, 0.0), 
+                        q2, 
+                        rospy.Time.now(), 
+                        "joint_frame", 
+                        "vehicle_frame")
+        
+        vehicle_t_joint1 = tf.transformations.translation_matrix(translation)
+        vehicle_R_joint1   = tf.transformations.quaternion_matrix(q2)
+        vehicle_T_joint1 = np.zeros((4,4))
+        vehicle_T_joint1[0:3,0:3] = vehicle_R_joint1[0:3,0:3]
+        vehicle_T_joint1[:4,3] = vehicle_t_joint1[:4,3]
+        print vehicle_T_joint1
+
+        footprint = np.array([[0.0],[0.0],[0.0],[1.0]])
+        footprint = np.matmul(vehicle_T_joint1, footprint)
+
+        self.joint_pose.position.x = footprint[0,0]
+        self.joint_pose.position.y = footprint[1,0]
+        self.joint_pose.position.z = footprint[2]
+        self.joint_pose.orientation.x = q2[0]
+        self.joint_pose.orientation.y = q2[1]
+        self.joint_pose.orientation.z = q2[2]
+        self.joint_pose.orientation.w = q2[3]
+
+        #Create pose message
+        msg = PoseStamped()
+
+        #Header details for pose message
+        msg.header.frame_id = "map"
+        msg.header.stamp = rospy.Time.now()
+
+        #Pose information
+        msg.pose = self.joint_pose
+
+        self.joint_pose_publisher.publish(msg)
 
     def publish_messages(self, x, y, z, q, cloud, points):
 
@@ -268,7 +353,6 @@ class VehicleBot(object):
         self.pose_array_publisher.publish(array_msg)
         self.point_cloud_publisher.publish(point_cloud)
         self.grid_publisher.publish(viz_points)
-
 
 if __name__ == '__main__':
     try:
