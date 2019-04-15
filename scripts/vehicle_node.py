@@ -42,9 +42,6 @@ class VehicleBot(object):
         #Create a lock to prevent race conditions when calculating position
         self.lock = threading.Lock()
 
-        #Create a lock to prevent race conditions when calculating position
-        self.joint_lock = threading.Lock()
-
         #Timer to update pose every 50ms
         rospy.Timer(rospy.Duration(0.05), self.update_position)
 
@@ -128,7 +125,7 @@ class VehicleBot(object):
 
         #Calculate z position using linear interpolation and create cloud array
         
-        #1. Create range to be used in interpolation function
+        #1. Create range to be used in interpolation function based on the gaussian array shape
         x = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
         y = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
 
