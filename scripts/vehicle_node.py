@@ -164,6 +164,7 @@ class VehicleBot(object):
         f = RectBivariateSpline(x,y, self.gaussian_array)
 
         #4. Find z value for x and y coordinate of vehicle using interpolation function
+        # TODO compute z height based on footprint
         self.pose.position.z = f(self.pose.position.x, self.pose.position.y)
 
         #Convert Euler Angles to Quarternion
@@ -176,21 +177,19 @@ class VehicleBot(object):
 
         #Construct the homogenous transformation matrix for map to vehicle frame
         translation = [self.pose.position.x, self.pose.position.y, self.pose.position.z]
-        map_t_vehicle = tf.transformations.translation_matrix(translation)
-        map_R_vehicle   = tf.transformations.quaternion_matrix(q)
-        map_T_vehicle = np.zeros((4,4))
-        map_T_vehicle[0:3,0:3] = map_R_vehicle[0:3,0:3]
-        map_T_vehicle[:4,3] = map_t_vehicle[:4,3]
+        map_T_vehicle = tf.transformations.quaternion_matrix(q) 
+        map_T_vehicle[:3,3] = np.array(translation)
 
         #Create footprint of vehicle
-        x1 = np.linspace((-self.vehicle_length), (self.vehicle_length),30)
-        y1 = np.linspace((-self.vehicle_width), (self.vehicle_width),15)
+        x1 = np.linspace((-self.vehicle_length/2), (self.vehicle_length/2),30)
+        y1 = np.linspace((-self.vehicle_width/2), (self.vehicle_width/2),15)
         x1, y1 = np.meshgrid(x1, y1)
         x1 = x1.ravel()
         y1 = y1.ravel()
 
         #For every point in the vehicle footprint, calculate the position wrt to the vehicle's frame
         # and its interpolated z value. Add this point to a list of points for visualization.
+        # TODO Flatten into a single matrix multiply to remove for loop
         points = []
         for i in range(x1.shape[0]):
             p = Point()
@@ -248,7 +247,7 @@ class VehicleBot(object):
         vehicle_T_joint1 = np.zeros((4,4))
         vehicle_T_joint1[0:3,0:3] = vehicle_R_joint1[0:3,0:3]
         vehicle_T_joint1[:4,3] = vehicle_t_joint1[:4,3]
-        print vehicle_T_joint1
+        # print vehicle_T_joint1
 
         footprint = np.array([[0.0],[0.0],[0.0],[1.0]])
         footprint = np.matmul(vehicle_T_joint1, footprint)
