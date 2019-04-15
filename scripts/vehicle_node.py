@@ -234,7 +234,6 @@ class VehicleBot(object):
 
         br = tf.TransformBroadcaster()
         q2 = tf.transformations.quaternion_from_euler(0.0, self.joint_pitch, -3.14159)
-        translation =  [-0.15, 0.0, 0.0]
 
         br.sendTransform((-0.15, 0.0, 0.0), 
                         q2, 
@@ -242,12 +241,18 @@ class VehicleBot(object):
                         "joint_frame", 
                         "vehicle_frame")
         
+
+       #Construct the homogenous transformation matrix for vehicle frame to joint1
+        translation =  [-0.15, 0.0, 0.0]
+        map_T_vehicle = tf.transformations.quaternion_matrix(q2) 
+        map_T_vehicle[:3,3] = np.array(translation)
+
+
         vehicle_t_joint1 = tf.transformations.translation_matrix(translation)
         vehicle_R_joint1   = tf.transformations.quaternion_matrix(q2)
         vehicle_T_joint1 = np.zeros((4,4))
         vehicle_T_joint1[0:3,0:3] = vehicle_R_joint1[0:3,0:3]
         vehicle_T_joint1[:4,3] = vehicle_t_joint1[:4,3]
-        # print vehicle_T_joint1
 
         footprint = np.array([[0.0],[0.0],[0.0],[1.0]])
         footprint = np.matmul(vehicle_T_joint1, footprint)
@@ -264,7 +269,7 @@ class VehicleBot(object):
         msg = PoseStamped()
 
         #Header details for pose message
-        msg.header.frame_id = "map"
+        msg.header.frame_id = "vehicle_frame"
         msg.header.stamp = rospy.Time.now()
 
         #Pose information

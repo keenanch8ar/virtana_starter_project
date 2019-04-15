@@ -42,7 +42,8 @@ if __name__ == '__main__':
     turn = 1.0
     try:
         print(msg)
-        while(1):
+        rate = rospy.Rate(10)
+        while not rospy.is_shutdown():
             key = getKey()
             if key in moveBindings1.keys():
                 x = moveBindings1[key][0]
