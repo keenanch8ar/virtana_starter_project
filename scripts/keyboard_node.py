@@ -17,8 +17,8 @@ Joint 1:                Joint 2:
 CTRL-C to quit
 """
 
-moveBindings1 = {'t':1.0,'g':0.0, 'b':-1.0}
-moveBindings2 = {'y':1.0,'h':0.0, 'n':-1.0}
+moveBindings1 = {'t':-1.0,'g':0.0, 'b':1.0}
+moveBindings2 = {'y':-1.0,'h':0.0, 'n':1.0}
 
 
 

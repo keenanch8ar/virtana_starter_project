@@ -41,7 +41,8 @@ class VehicleBot(object):
         self.joint1_pitch = 0.0
         self.joint2_pitch = 0.0
         self.pose = Pose()
-        self.joint_pose = Pose()
+        self.joint1_pose = Pose()
+        self.joint2_pose = Pose()
 
         #Create a lock to prevent race conditions when calculating position
         self.lock = threading.Lock()
@@ -52,9 +53,6 @@ class VehicleBot(object):
         #Timer to update pose every 50ms
         rospy.Timer(rospy.Duration(0.05), self.update_position)
 
-        #Timer to update pose every 50ms
-        rospy.Timer(rospy.Duration(0.05), self.update_joint_position)
-
         #Subscriber for teleop key
         rospy.Subscriber("/turtlebot_teleop/cmd_vel", Twist, self.velocity_cmd_callback)
 
@@ -64,9 +62,12 @@ class VehicleBot(object):
         #Publisher for PoseStamped() Message
         self.pose_publisher = rospy.Publisher("/move_vehicle/cmd", PoseStamped, queue_size=1)
 
-        #Publisher for Joint PoseStamped() Message
-        self.joint_pose_publisher = rospy.Publisher("/move_joint/cmd", PoseStamped, queue_size=1)
+        #Publisher for Joint1 PoseStamped() Message
+        self.joint1_pose_publisher = rospy.Publisher("/move_joint1/cmd", PoseStamped, queue_size=1)
 
+        #Publisher for Joint2 PoseStamped() Message
+        self.joint2_pose_publisher = rospy.Publisher("/move_joint2/cmd", PoseStamped, queue_size=1)
+        
         #Publisher for a Float32MultiArray() Message
         self.pose_array_publisher = rospy.Publisher("/move_vehicle/cmd_array", Float32MultiArray, queue_size=1)
 
@@ -202,12 +203,7 @@ class VehicleBot(object):
             p.z = footprint[2,0]
             points.append(p)
 
-        #Publish all messages
-        self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                            self.pose.position.z, q, cloud, points)
-
-    def update_joint_position(self, event):
-
+#################################################################################################
         #Create a copy of the most recent stored twist data to perform calculations
         with self.joint_lock:
             joint_data = copy.deepcopy(self.joint)
@@ -224,7 +220,6 @@ class VehicleBot(object):
         if not joint_data.velocity:
             joint_data.velocity = [0.0,0.0]
         
-        #################################################################################
         angle = joint_data.velocity[0]*time
         angle2 = joint_data.velocity[1]*time
 
@@ -236,49 +231,80 @@ class VehicleBot(object):
         V_T_SRz = tf.transformations.quaternion_matrix(static_rot)
         V_T_SRz[:3,3] = np.array(translation)
 
-        dynamic_rot = tf.transformations.quaternion_from_euler(0.0, -self.joint1_pitch, 0.0)
+        dynamic_rot = tf.transformations.quaternion_from_euler(0.0, self.joint1_pitch, 0.0)
         translation =  [0.0, 0.0, 0.0]
-        SRz_T_DRy = tf.transformations.quaternion_matrix(dynamic_rot)
-        SRz_T_DRy[:3,3] = np.array(translation)
+        SRz_T_J1 = tf.transformations.quaternion_matrix(dynamic_rot)
+        SRz_T_J1[:3,3] = np.array(translation)
 
         no_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
-        translation =  [0.15, 0.0, 0.0]
-        DRy_T_J1 = tf.transformations.quaternion_matrix(no_rot)
-        DRy_T_J1[:3,3] = np.array(translation)
+        translation =  [0.1, 0.0, 0.0]
+        J1_T_STx = tf.transformations.quaternion_matrix(no_rot)
+        J1_T_STx[:3,3] = np.array(translation)
 
-        dynamic_rot2 = tf.transformations.quaternion_from_euler(0.0, -self.joint2_pitch, 0.0)
+        dynamic_rot2 = tf.transformations.quaternion_from_euler(0.0, self.joint2_pitch, 0.0)
         translation =  [0.0, 0.0, 0.0]
-        J1_T_DRy2 = tf.transformations.quaternion_matrix(dynamic_rot2)
-        J1_T_DRy2[:3,3] = np.array(translation)
+        STx_T_J2 = tf.transformations.quaternion_matrix(dynamic_rot2)
+        STx_T_J2[:3,3] = np.array(translation)
 
-        V_T_DRy = np.matmul(V_T_SRz, SRz_T_DRy)
-        V_T_J1 = np.matmul(V_T_DRy, DRy_T_J1)
-        V_T_DRy2 = np.matmul(V_T_J1, J1_T_DRy2)
-        rot_J1 = tf.transformations.quaternion_from_matrix(V_T_DRy2)
+        V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1)
+        V_T_STx = np.matmul(V_T_J1, J1_T_STx)
+        V_T_J2 = np.matmul(V_T_STx, STx_T_J2)
+        rot_J1 = tf.transformations.quaternion_from_matrix(V_T_J1)
+        rot_J2 = tf.transformations.quaternion_from_matrix(V_T_J2)
 
-        self.joint_pose.position.x = V_T_DRy2[0][3]
-        self.joint_pose.position.y = V_T_DRy2[1][3]
-        self.joint_pose.position.z = V_T_DRy2[2][3]
-        self.joint_pose.orientation.x = rot_J1[0]
-        self.joint_pose.orientation.y = rot_J1[1]
-        self.joint_pose.orientation.z = rot_J1[2]
-        self.joint_pose.orientation.w = rot_J1[3]
+        self.joint1_pose.position.x = V_T_J1[0][3]
+        self.joint1_pose.position.y = V_T_J1[1][3]
+        self.joint1_pose.position.z = V_T_J1[2][3]
+        self.joint1_pose.orientation.x = rot_J1[0]
+        self.joint1_pose.orientation.y = rot_J1[1]
+        self.joint1_pose.orientation.z = rot_J1[2]
+        self.joint1_pose.orientation.w = rot_J1[3]
 
-        ####################################################################
+        self.joint2_pose.position.x = V_T_J2[0][3]
+        self.joint2_pose.position.y = V_T_J2[1][3]
+        self.joint2_pose.position.z = V_T_J2[2][3]
+        self.joint2_pose.orientation.x = rot_J2[0]
+        self.joint2_pose.orientation.y = rot_J2[1]
+        self.joint2_pose.orientation.z = rot_J2[2]
+        self.joint2_pose.orientation.w = rot_J2[3]
 
-        #Create pose message
-        msg = PoseStamped()
+        ripper_point =  [0.05, 0.0, 0.0, 1.0]
+        map_T_J2 =  np.matmul(map_T_vehicle, V_T_J2)
+        tip =  np.matmul(map_T_J2, ripper_point)
+        ripper_tip = Point()
+        ripper_tip.x = tip[0]
+        ripper_tip.y = tip[1]
+        ripper_tip.z = tip[2]
+        points.append(ripper_tip)
 
-        #Header details for pose message
-        msg.header.frame_id = "vehicle_frame"
-        msg.header.stamp = rospy.Time.now()
+        index_x = int(tip[0]/self.resolution)
+        index_y = int(tip[1]/self.resolution)
 
-        #Pose information
-        msg.pose = self.joint_pose
+        x = np.arange((index_x-1),(index_x+2), 1)
+        y = np.arange((index_y-1),(index_y+2), 1)
+        x1, y1 = np.meshgrid(x, y)
+        x1 = x1.ravel()
+        y1 = y1.ravel()
 
-        self.joint_pose_publisher.publish(msg)
+        for j in range(x1.shape[0]):
+            if 0 <= x1[j] <= self.gaussian_array.shape[0]:
+                if 0 <= y1[j] <= self.gaussian_array.shape[1]:
+                    if (self.gaussian_array[index_x][index_y] >= tip[2]):
+                        cell = self.gaussian_array[x1[j]][y1[j]]
+                        diff = self.gaussian_array[index_x][index_y] - tip[2]
+                        cell += diff
+                        self.gaussian_array[x1[j]][y1[j]] = cell
+                        self.gaussian_array[index_x][index_y] = tip[2]
+        else:
+            pass
 
-    def publish_messages(self, x, y, z, q, cloud, points):
+        #Publish all messages
+        self.publish_messages(self.pose.position.x, self.pose.position.y, 
+                             self.pose.position.z, q, cloud, points, self.joint1_pose, 
+                             self.joint2_pose)
+
+
+    def publish_messages(self, x, y, z, q, cloud, points, joint1, joint2):
 
         """
         Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization
@@ -352,12 +378,32 @@ class VehicleBot(object):
         viz_points.color.g = 0.0
         viz_points.color.b = 0.0
         viz_points.points = points
-        
+
+
+        ################################################################
+
+        #Create pose message
+        msg1 = PoseStamped()
+        msg2 = PoseStamped()
+        #Header details for pose message
+        msg1.header.frame_id = "vehicle_frame"
+        msg1.header.stamp = rospy.Time.now()
+
+        msg2.header.frame_id = "vehicle_frame"
+        msg2.header.stamp = rospy.Time.now()
+
+        #Pose information
+        msg1.pose = joint1
+        msg2.pose = joint2
+
         #Publish pose, vizualization, array information and point cloud
         self.pose_publisher.publish(msg)
+        self.joint1_pose_publisher.publish(msg1)
+        self.joint2_pose_publisher.publish(msg2)
         self.pose_array_publisher.publish(array_msg)
         self.point_cloud_publisher.publish(point_cloud)
         self.grid_publisher.publish(viz_points)
+
 
 if __name__ == '__main__':
     try:
