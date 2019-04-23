@@ -38,7 +38,8 @@ class VehicleBot(object):
 
         #Create variables for calculations
         self.vehicle_yaw = 0.0
-        self.joint_pitch = 0.0
+        self.joint1_pitch = 0.0
+        self.joint2_pitch = 0.0
         self.pose = Pose()
         self.joint_pose = Pose()
 
@@ -223,42 +224,47 @@ class VehicleBot(object):
         if not joint_data.velocity:
             joint_data.velocity = [0.0,0.0]
         
-
+        #################################################################################
         angle = joint_data.velocity[0]*time
+        angle2 = joint_data.velocity[1]*time
 
-        self.joint_pitch += angle
+        self.joint1_pitch += angle
+        self.joint2_pitch += angle2
 
-        q2 = tf.transformations.quaternion_from_euler(0.0, self.joint_pitch, -3.14159)
-
-        br = tf.TransformBroadcaster()
-        br.sendTransform((-0.15, 0.0, 0.0), 
-                        q2, 
-                        rospy.Time.now(), 
-                        "joint_frame", 
-                        "vehicle_frame")
-        
-
-        #Construct the homogenous transformation matrix for vehicle frame to joint1
+        static_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 3.14159)
         translation =  [0.0, 0.0, 0.0]
-        vehicle_T_SR = tf.transformations.quaternion_matrix(q2) 
-        vehicle_T_SR[:3,3] = np.array(translation)
+        V_T_SRz = tf.transformations.quaternion_matrix(static_rot)
+        V_T_SRz[:3,3] = np.array(translation)
 
-        q3 = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
+        dynamic_rot = tf.transformations.quaternion_from_euler(0.0, -self.joint1_pitch, 0.0)
+        translation =  [0.0, 0.0, 0.0]
+        SRz_T_DRy = tf.transformations.quaternion_matrix(dynamic_rot)
+        SRz_T_DRy[:3,3] = np.array(translation)
+
+        no_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
         translation =  [0.15, 0.0, 0.0]
-        vehicle_T_joint1 = tf.transformations.quaternion_matrix(q3) 
-        vehicle_T_joint1[:3,3] = np.array(translation)
+        DRy_T_J1 = tf.transformations.quaternion_matrix(no_rot)
+        DRy_T_J1[:3,3] = np.array(translation)
 
-        footprint = np.array([[0.0],[0.0],[0.0],[1.0]])
-        footprint = np.matmul(vehicle_T_joint1, footprint)
-        footprint = np.matmul(vehicle_T_SR, footprint)
+        dynamic_rot2 = tf.transformations.quaternion_from_euler(0.0, -self.joint2_pitch, 0.0)
+        translation =  [0.0, 0.0, 0.0]
+        J1_T_DRy2 = tf.transformations.quaternion_matrix(dynamic_rot2)
+        J1_T_DRy2[:3,3] = np.array(translation)
 
-        self.joint_pose.position.x = footprint[0,0]
-        self.joint_pose.position.y = footprint[1,0]
-        self.joint_pose.position.z = footprint[2,0]
-        self.joint_pose.orientation.x = q2[0]
-        self.joint_pose.orientation.y = q2[1]
-        self.joint_pose.orientation.z = q2[2]
-        self.joint_pose.orientation.w = q2[3]
+        V_T_DRy = np.matmul(V_T_SRz, SRz_T_DRy)
+        V_T_J1 = np.matmul(V_T_DRy, DRy_T_J1)
+        V_T_DRy2 = np.matmul(V_T_J1, J1_T_DRy2)
+        rot_J1 = tf.transformations.quaternion_from_matrix(V_T_DRy2)
+
+        self.joint_pose.position.x = V_T_DRy2[0][3]
+        self.joint_pose.position.y = V_T_DRy2[1][3]
+        self.joint_pose.position.z = V_T_DRy2[2][3]
+        self.joint_pose.orientation.x = rot_J1[0]
+        self.joint_pose.orientation.y = rot_J1[1]
+        self.joint_pose.orientation.z = rot_J1[2]
+        self.joint_pose.orientation.w = rot_J1[3]
+
+        ####################################################################
 
         #Create pose message
         msg = PoseStamped()
