@@ -208,41 +208,53 @@ class VehicleBot(object):
         with self.joint_lock:
             joint_data = copy.deepcopy(self.joint)
 
+        #If the data is empty on first run, fill with 0.0
         if not joint_data.velocity:
             joint_data.velocity = [0.0,0.0]
         
+        #Calculate angle based on velocity data and time
         angle = joint_data.velocity[0]*time
         angle2 = joint_data.velocity[1]*time
 
         self.joint1_pitch += angle
         self.joint2_pitch += angle2
 
+        #Transformations from vehicle frame to Joint1 and Joint2
+    
+        #Static rotation about z-axis 
         static_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 3.14159)
         translation =  [0.0, 0.0, 0.0]
         V_T_SRz = tf.transformations.quaternion_matrix(static_rot)
         V_T_SRz[:3,3] = np.array(translation)
 
+
+        #Dynamic rotation of Joint 1
         dynamic_rot = tf.transformations.quaternion_from_euler(0.0, self.joint1_pitch, 0.0)
         translation =  [0.0, 0.0, 0.0]
         SRz_T_J1 = tf.transformations.quaternion_matrix(dynamic_rot)
         SRz_T_J1[:3,3] = np.array(translation)
 
+
+        #Translation based on length of Joint1 arm 
         no_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
-        translation =  [0.1, 0.0, 0.0]
+        translation =  [self.joint1_length, 0.0, 0.0]
         J1_T_STx = tf.transformations.quaternion_matrix(no_rot)
         J1_T_STx[:3,3] = np.array(translation)
 
+        #Dynamic rotation of Joint2
         dynamic_rot2 = tf.transformations.quaternion_from_euler(0.0, self.joint2_pitch, 0.0)
         translation =  [0.0, 0.0, 0.0]
         STx_T_J2 = tf.transformations.quaternion_matrix(dynamic_rot2)
         STx_T_J2[:3,3] = np.array(translation)
 
+        #matrix multiplication to form the homogenous matrices
         V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1)
         V_T_STx = np.matmul(V_T_J1, J1_T_STx)
         V_T_J2 = np.matmul(V_T_STx, STx_T_J2)
         rot_J1 = tf.transformations.quaternion_from_matrix(V_T_J1)
         rot_J2 = tf.transformations.quaternion_from_matrix(V_T_J2)
 
+        #Assign pose information for publishing
         self.joint1_pose.position.x = V_T_J1[0][3]
         self.joint1_pose.position.y = V_T_J1[1][3]
         self.joint1_pose.position.z = V_T_J1[2][3]
@@ -259,7 +271,8 @@ class VehicleBot(object):
         self.joint2_pose.orientation.z = rot_J2[2]
         self.joint2_pose.orientation.w = rot_J2[3]
 
-        ripper_point =  [0.05, 0.0, 0.0, 1.0]
+        #The ripper tip is a point in the J2's frame, this is based on the length of the ripper
+        ripper_point =  [self.ripper_length, 0.0, 0.0, 1.0]
         map_T_J2 =  np.matmul(map_T_vehicle, V_T_J2)
         tip =  np.matmul(map_T_J2, ripper_point)
         ripper_tip = Point()
@@ -268,21 +281,27 @@ class VehicleBot(object):
         ripper_tip.z = tip[2]
         points.append(ripper_tip)
 
+        #use the ripper's position as an index value to access the gaussian array
         index_x = int(tip[0]/self.resolution)
         index_y = int(tip[1]/self.resolution)
 
-        print_x = np.arange((index_x-1),(index_x+2), 1)
-        print_y = np.arange((index_y-1),(index_y+2), 1)
-        print_x1, print_y1 = np.meshgrid(print_x, print_y)
-        print_x2 = print_x1.ravel()
-        print_y2 = print_y1.ravel()
+        #Create a range of index values surrounding index_x and y
+        x = np.arange((index_x-1),(index_x+2), 1)
+        y = np.arange((index_y-1),(index_y+2), 1)
+        x1, y1 = np.meshgrid(x,y)
+        x2 = x1.ravel()
+        y2 = y1.ravel()
+
+        #First check if the index is within the gaussian array, if it is, then check if the tip of
+        #the ripper is beneath the soil, if it is, then remove the soil above the tip and disperse
+        #it to the surrounding cells, provided those cells are also within the gaussian array
 
         if (0 <= index_x <= self.gaussian_array.shape[0]) and (0 <= index_y <= self.gaussian_array.shape[1]):
             if (self.gaussian_array[index_x][index_y] >= tip[2]):
                 diff = self.gaussian_array[index_x][index_y] - tip[2]
-                for i in range(print_x2.shape[0]):
-                    if (0 <= print_x2[i] <= self.gaussian_array.shape[0]) and (0 <= print_y2[i] <= self.gaussian_array.shape[1]):
-                            self.gaussian_array[print_x2[i]][print_y2[i]] += diff/9
+                for i in range(x2.shape[0]):
+                    if (0 <= x2[i] <= self.gaussian_array.shape[0]) and (0 <= y2[i] <= self.gaussian_array.shape[1]):
+                            self.gaussian_array[x2[i]][y2[i]] += diff/8
                 self.gaussian_array[index_x][index_y] = tip[2]
 
 
