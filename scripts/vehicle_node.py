@@ -208,15 +208,6 @@ class VehicleBot(object):
         with self.joint_lock:
             joint_data = copy.deepcopy(self.joint)
 
-        #time elapsed since last update position call
-        if hasattr(event, 'last_real'):
-            if event.last_real is None:
-                time = rospy.Duration(0.05)
-            else:
-                time = event.current_real - event.last_real
-        
-        time = time.to_sec()
-
         if not joint_data.velocity:
             joint_data.velocity = [0.0,0.0]
         
@@ -280,23 +271,20 @@ class VehicleBot(object):
         index_x = int(tip[0]/self.resolution)
         index_y = int(tip[1]/self.resolution)
 
-        x = np.arange((index_x-1),(index_x+2), 1)
-        y = np.arange((index_y-1),(index_y+2), 1)
-        x1, y1 = np.meshgrid(x, y)
-        x1 = x1.ravel()
-        y1 = y1.ravel()
+        print_x = np.arange((index_x-1),(index_x+2), 1)
+        print_y = np.arange((index_y-1),(index_y+2), 1)
+        print_x1, print_y1 = np.meshgrid(print_x, print_y)
+        print_x2 = print_x1.ravel()
+        print_y2 = print_y1.ravel()
 
-        for j in range(x1.shape[0]):
-            if 0 <= x1[j] <= self.gaussian_array.shape[0]:
-                if 0 <= y1[j] <= self.gaussian_array.shape[1]:
-                    if (self.gaussian_array[index_x][index_y] >= tip[2]):
-                        cell = self.gaussian_array[x1[j]][y1[j]]
-                        diff = self.gaussian_array[index_x][index_y] - tip[2]
-                        cell += diff
-                        self.gaussian_array[x1[j]][y1[j]] = cell
-                        self.gaussian_array[index_x][index_y] = tip[2]
-        else:
-            pass
+        if (0 <= index_x <= self.gaussian_array.shape[0]) and (0 <= index_y <= self.gaussian_array.shape[1]):
+            if (self.gaussian_array[index_x][index_y] >= tip[2]):
+                diff = self.gaussian_array[index_x][index_y] - tip[2]
+                for i in range(print_x2.shape[0]):
+                    if (0 <= print_x2[i] <= self.gaussian_array.shape[0]) and (0 <= print_y2[i] <= self.gaussian_array.shape[1]):
+                            self.gaussian_array[print_x2[i]][print_y2[i]] += diff/9
+                self.gaussian_array[index_x][index_y] = tip[2]
+
 
         #Publish all messages
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
