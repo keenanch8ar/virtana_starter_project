@@ -7,6 +7,7 @@ import numpy as np
 import copy
 import threading
 import sensor_msgs.point_cloud2 as pcl2
+import tf_conversions
 from scipy.ndimage import gaussian_filter
 from numpy import sin, cos
 from geometry_msgs.msg import Twist, PoseStamped, Pose, Point
@@ -32,7 +33,7 @@ class VehicleBot(object):
         #Create Gaussian Array of normally distributed noise
         self.gaussian_array = self.create_gaussian_array()
         
-        #Create Twist variables to store cmd_vel
+        #Create Twist and Joint State variables to store cmd_vel
         self.twist = Twist()
         self.joint = JointState()
 
@@ -41,17 +42,10 @@ class VehicleBot(object):
         self.joint1_pitch = 0.0
         self.joint2_pitch = 0.0
         self.pose = Pose()
-        self.joint1_pose = Pose()
-        self.joint2_pose = Pose()
 
-        #Create a lock to prevent race conditions when calculating position
+        #Create locks to prevent race conditions when calculating position
         self.lock = threading.Lock()
-
-        #Create a lock to prevent race conditions when calculating position
         self.joint_lock = threading.Lock()
-
-        #Timer to update pose every 50ms
-        rospy.Timer(rospy.Duration(0.05), self.update_position)
 
         #Subscriber for teleop key
         rospy.Subscriber("/turtlebot_teleop/cmd_vel", Twist, self.velocity_cmd_callback)
@@ -77,6 +71,9 @@ class VehicleBot(object):
         #Publisher for Vehicle Marker
         self.grid_publisher = rospy.Publisher('/grid_marker', Marker, queue_size=1)
 
+        #Timer to update pose every 50ms
+        rospy.Timer(rospy.Duration(0.05), self.update_position)
+
         #Keeps program running until interrupted
         rospy.spin()
 
@@ -101,26 +98,28 @@ class VehicleBot(object):
     def velocity_cmd_callback(self, data):
         
         """
-        Updates the most recent command velocity to a twist variable
+        Updates the most recent command velocity for the vehicle to a Twist variable
         """
         with self.lock:
             self.twist = data
 
     def joint_cmd_callback(self, data):
 
+        """
+        Updates the most recent command velocity for the joints to a Joint State variable
+        """
         with self.joint_lock:
             self.joint = data
 
     def update_position(self, event):
 
         """
-        Computes the pose of the vehicle in the terrian map. 
+        Computes the pose of the vehicle and the ripper in the terrian map.
         """
 
         #Create a copy of the most recent stored twist data to perform calculations
         with self.lock:
             velocity_data = copy.deepcopy(self.twist)
-
 
         #time elapsed since last update position call
         if hasattr(event, 'last_real'):
@@ -203,8 +202,8 @@ class VehicleBot(object):
             p.z = footprint[2,0]
             points.append(p)
 
-#################################################################################################
-        #Create a copy of the most recent stored twist data to perform calculations
+        #####################################################################################
+        #Create a copy of the most recent stored JointState data to perform calculations
         with self.joint_lock:
             joint_data = copy.deepcopy(self.joint)
 
@@ -227,13 +226,22 @@ class VehicleBot(object):
         V_T_SRz = tf.transformations.quaternion_matrix(static_rot)
         V_T_SRz[:3,3] = np.array(translation)
 
+        #Forming SRz_T_J1 from trigs, rotate frame about y-axis based on joint pitch
+        rot_SRz_T_J1_2 = [[cos(self.joint1_pitch), 0.0, sin(self.joint1_pitch)],
+                         [0.0, 1.0, 0.0],
+                         [-sin(self.joint1_pitch), 0.0, cos(self.joint1_pitch)]]
+
+        trans_SRz_T_J1_2 = [0.0, 0.0, 0.0, 1.0]
+
+        SRz_T_J1_2 = np.zeros((4,4))
+        SRz_T_J1_2[:3,:3] = rot_SRz_T_J1_2
+        SRz_T_J1_2[:4,3] = trans_SRz_T_J1_2
 
         #Dynamic rotation of Joint 1
         dynamic_rot = tf.transformations.quaternion_from_euler(0.0, self.joint1_pitch, 0.0)
         translation =  [0.0, 0.0, 0.0]
         SRz_T_J1 = tf.transformations.quaternion_matrix(dynamic_rot)
         SRz_T_J1[:3,3] = np.array(translation)
-
 
         #Translation based on length of Joint1 arm 
         no_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
@@ -248,46 +256,31 @@ class VehicleBot(object):
         STx_T_J2[:3,3] = np.array(translation)
 
         #matrix multiplication to form the homogenous matrices
-        V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1)
+        #V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1)
+        V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1_2)
         V_T_STx = np.matmul(V_T_J1, J1_T_STx)
         V_T_J2 = np.matmul(V_T_STx, STx_T_J2)
-        rot_J1 = tf.transformations.quaternion_from_matrix(V_T_J1)
-        rot_J2 = tf.transformations.quaternion_from_matrix(V_T_J2)
 
-        #Assign pose information for publishing
-        self.joint1_pose.position.x = V_T_J1[0][3]
-        self.joint1_pose.position.y = V_T_J1[1][3]
-        self.joint1_pose.position.z = V_T_J1[2][3]
-        self.joint1_pose.orientation.x = rot_J1[0]
-        self.joint1_pose.orientation.y = rot_J1[1]
-        self.joint1_pose.orientation.z = rot_J1[2]
-        self.joint1_pose.orientation.w = rot_J1[3]
-
-        self.joint2_pose.position.x = V_T_J2[0][3]
-        self.joint2_pose.position.y = V_T_J2[1][3]
-        self.joint2_pose.position.z = V_T_J2[2][3]
-        self.joint2_pose.orientation.x = rot_J2[0]
-        self.joint2_pose.orientation.y = rot_J2[1]
-        self.joint2_pose.orientation.z = rot_J2[2]
-        self.joint2_pose.orientation.w = rot_J2[3]
+        frame1 = tf_conversions.fromMatrix(V_T_J1)
+        frame2 = tf_conversions.fromMatrix(V_T_J2)
 
         #The ripper tip is a point in the J2's frame, this is based on the length of the ripper
-        ripper_point =  [self.ripper_length, 0.0, 0.0, 1.0]
+        ripper_tip_pt_J2 =  [self.ripper_length, 0.0, 0.0, 1.0]
         map_T_J2 =  np.matmul(map_T_vehicle, V_T_J2)
-        tip =  np.matmul(map_T_J2, ripper_point)
+        ripper_tip_pt_map =  np.matmul(map_T_J2, ripper_tip_pt_J2)
         ripper_tip = Point()
-        ripper_tip.x = tip[0]
-        ripper_tip.y = tip[1]
-        ripper_tip.z = tip[2]
+        ripper_tip.x = ripper_tip_pt_map[0]
+        ripper_tip.y = ripper_tip_pt_map[1]
+        ripper_tip.z = ripper_tip_pt_map[2]
         points.append(ripper_tip)
 
         #use the ripper's position as an index value to access the gaussian array
-        index_x = int(tip[0]/self.resolution)
-        index_y = int(tip[1]/self.resolution)
+        ripper_tip_cell_index_x = int(ripper_tip_pt_map[0]/self.resolution)
+        ripper_tip_cell_index_y = int(ripper_tip_pt_map[1]/self.resolution)
 
         #Create a range of index values surrounding index_x and y
-        x = np.arange((index_x-1),(index_x+2), 1)
-        y = np.arange((index_y-1),(index_y+2), 1)
+        x = np.arange((ripper_tip_cell_index_x-1),(ripper_tip_cell_index_x+2), 1)
+        y = np.arange((ripper_tip_cell_index_y-1),(ripper_tip_cell_index_y+2), 1)
         x1, y1 = np.meshgrid(x,y)
         x2 = x1.ravel()
         y2 = y1.ravel()
@@ -296,22 +289,19 @@ class VehicleBot(object):
         #the ripper is beneath the soil, if it is, then remove the soil above the tip and disperse
         #it to the surrounding cells, provided those cells are also within the gaussian array
 
-        if (0 <= index_x <= self.gaussian_array.shape[0]) and (0 <= index_y <= self.gaussian_array.shape[1]):
-            if (self.gaussian_array[index_x][index_y] >= tip[2]):
-                diff = self.gaussian_array[index_x][index_y] - tip[2]
+        if (0 <= ripper_tip_cell_index_x <= (self.gaussian_array.shape[0]-1)) and (0 <= ripper_tip_cell_index_y <= (self.gaussian_array.shape[1]-1)):
+            if (self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] > ripper_tip_pt_map[2]):
+                diff = self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] - ripper_tip_pt_map[2]
                 for i in range(x2.shape[0]):
-                    if (0 <= x2[i] <= self.gaussian_array.shape[0]) and (0 <= y2[i] <= self.gaussian_array.shape[1]):
+                    if (0 <= x2[i] <= (self.gaussian_array.shape[0]-1)) and (0 <= y2[i] <= (self.gaussian_array.shape[1]-1)):
                             self.gaussian_array[x2[i]][y2[i]] += diff/8
-                self.gaussian_array[index_x][index_y] = tip[2]
-
+                self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] = ripper_tip_pt_map[2]
 
         #Publish all messages
         self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                             self.pose.position.z, q, cloud, points, self.joint1_pose, 
-                             self.joint2_pose)
+                             self.pose.position.z, q, cloud, points, frame1, frame2)
 
-
-    def publish_messages(self, x, y, z, q, cloud, points, joint1, joint2):
+    def publish_messages(self, x, y, z, q, cloud, points, frame1, frame2):
 
         """
         Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization
@@ -400,8 +390,11 @@ class VehicleBot(object):
         msg2.header.stamp = rospy.Time.now()
 
         #Pose information
-        msg1.pose = joint1
-        msg2.pose = joint2
+        joint_1 = tf_conversions.toMsg(frame1)
+        joint_2 = tf_conversions.toMsg(frame2)
+        
+        msg1.pose = joint_1
+        msg2.pose = joint_2
 
         #Publish pose, vizualization, array information and point cloud
         self.pose_publisher.publish(msg)

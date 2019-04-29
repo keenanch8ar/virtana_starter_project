@@ -38,8 +38,8 @@ if __name__ == '__main__':
 
     vel1 = 0.0
     vel2 = 0.0
-    speed = 0.5
-    turn = 1.0
+    speed_scaling = 1.0
+
     try:
         print(msg)
         joint = JointState()
@@ -61,7 +61,7 @@ if __name__ == '__main__':
                     break
 
             joint.header.stamp = rospy.Time.now()
-            joint.velocity = [vel1*speed,vel2*speed]
+            joint.velocity = [vel1*speed_scaling,vel2*speed_scaling]
             key_pub.publish(joint)
 
     except Exception as e:
@@ -70,7 +70,6 @@ if __name__ == '__main__':
     finally:
 
         joint = JointState()
-        joint.header = Header()
         joint.name = ['joint1', 'joint2']
         joint.position = []
         joint.effort = []
