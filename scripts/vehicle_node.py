@@ -30,7 +30,7 @@ class VehicleBot(object):
         #Load parameters to be used in node. Description of each in parameters yaml file.
         self.__dict__.update(rospy.get_param('/map_params'))
         self.__dict__.update(rospy.get_param('/vehicle_params'))
-        
+
         #Create Gaussian Array of normally distributed noise
         self.gaussian_array = self.create_gaussian_array()
         
@@ -88,8 +88,7 @@ class VehicleBot(object):
         #Fill array of size l x w with Gaussian Noise.
         l = int(ceil(self.length/self.resolution))
         w = int(ceil(self.width/self.resolution))
-        grid_map = (l,w)
-        gaussian_array = np.random.normal(self.mu, self.sigma, grid_map)
+        gaussian_array = np.random.normal(self.mu, self.sigma, (l,w))
 
         #Filter the array to smoothen the variation of the noise
         gaussian_array = gaussian_filter(gaussian_array, self.sigma_filter)
@@ -148,60 +147,60 @@ class VehicleBot(object):
         #Calculate z position using linear interpolation and create cloud array
         
         #1. Create range to be used in interpolation function
-        x = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
-        y = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
+        terrain_points_x = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
+        terrain_points_y = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
 
         #2. Create cloud array to be converted to point cloud for vizualization
         #TODO do this without for loops
-        cloud = []
+        terrain_grid_points = []
         for i in range(self.gaussian_array.shape[0]):
             for j in range(self.gaussian_array.shape[1]):
                 innerlist = []
-                innerlist.append(x[i])
-                innerlist.append(y[j])
+                innerlist.append(terrain_points_x[i])
+                innerlist.append(terrain_points_y[j])
                 innerlist.append(self.gaussian_array[i][j])
-                cloud.append(innerlist)
+                terrain_grid_points.append(innerlist)
 
         #3. Create interpolation function based on the ranges and gaussian data
-        f = RectBivariateSpline(x,y, self.gaussian_array)
+        interp_func = RectBivariateSpline(terrain_points_x, terrain_points_y, self.gaussian_array)
 
         #4. Find z value for x and y coordinate of vehicle using interpolation function
         # TODO compute z height based on footprint
-        self.pose.position.z = f(self.pose.position.x, self.pose.position.y)
+        self.pose.position.z = interp_func(self.pose.position.x, self.pose.position.y)
 
         #Convert Euler Angles to Quarternion
-        q = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
+        V_rotation = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
 
         #Broadcast vehicle frame which is a child of the world frame
         br = tf.TransformBroadcaster()
         br.sendTransform((self.pose.position.x, self.pose.position.y, self.pose.position.z), 
-                        q, rospy.Time.now(),"vehicle_frame", "map")
+                        V_rotation, rospy.Time.now(),"vehicle_frame", "map")
 
         #Construct the homogenous transformation matrix for map to vehicle frame
-        translation = [self.pose.position.x, self.pose.position.y, self.pose.position.z]
-        map_T_vehicle = tf.transformations.quaternion_matrix(q) 
-        map_T_vehicle[:3,3] = np.array(translation)
+        V_translation = [self.pose.position.x, self.pose.position.y, self.pose.position.z]
+        map_T_V = tf.transformations.quaternion_matrix(V_rotation) 
+        map_T_V[:3,3] = np.array(V_translation)
 
         #Create footprint of vehicle
-        x1 = np.linspace((-self.vehicle_length/2), (self.vehicle_length/2),30)
-        y1 = np.linspace((-self.vehicle_width/2), (self.vehicle_width/2),15)
-        x1, y1 = np.meshgrid(x1, y1)
-        x1 = x1.ravel()
-        y1 = y1.ravel()
+        V_footprint_range_x = np.linspace((-self.vehicle_length/2), (self.vehicle_length/2),30)
+        V_footprint_range_y = np.linspace((-self.vehicle_width/2), (self.vehicle_width/2),15)
+        V_footprint_mesh_x, V_footprint_mesh_y = np.meshgrid(V_footprint_range_x, V_footprint_range_y)
+        V_footprint_x = V_footprint_mesh_x.ravel()
+        V_footprint_y = V_footprint_mesh_y.ravel()
 
         #For every point in the vehicle footprint, calculate the position wrt to the vehicle's frame
         # and its interpolated z value. Add this point to a list of points for visualization.
         # TODO Flatten into a single matrix multiply to remove for loop
-        points = []
-        for i in range(x1.shape[0]):
+        V_viz_points = []
+        for i in range(V_footprint_x.shape[0]):
             p = Point()
-            footprint = np.array([[x1[i]],[y1[i]],[0.0],[1.0]])
-            footprint = np.matmul(map_T_vehicle, footprint)
-            footprint[2,0] =  f(footprint[0,0], footprint[1,0])
-            p.x = footprint[0,0]
-            p.y = footprint[1,0]
-            p.z = footprint[2,0]
-            points.append(p)
+            V_footprint_point = np.array([[V_footprint_x[i]],[V_footprint_y[i]],[0.0],[1.0]])
+            V_footprint_point = np.matmul(map_T_V, V_footprint_point)
+            V_footprint_point[2,0] =  interp_func(V_footprint_point[0,0], V_footprint_point[1,0])
+            p.x = V_footprint_point[0,0]
+            p.y = V_footprint_point[1,0]
+            p.z = V_footprint_point[2,0]
+            V_viz_points.append(p)
 
         #####################################################################################
         #Create a copy of the most recent stored JointState data to perform calculations
@@ -227,82 +226,75 @@ class VehicleBot(object):
         V_T_SRz = tf.transformations.quaternion_matrix(static_rot)
         V_T_SRz[:3,3] = np.array(translation)
 
-        #Forming SRz_T_J1 from trigs, rotate frame about y-axis based on joint pitch
-        rot_SRz_T_J1_2 = [[cos(self.joint1_pitch), 0.0, sin(self.joint1_pitch)],
+        #Dynamic rotation about the y-axis of Joint 1
+        rot_SRz_T_J1 = [[cos(self.joint1_pitch), 0.0, sin(self.joint1_pitch)],
                          [0.0, 1.0, 0.0],
                          [-sin(self.joint1_pitch), 0.0, cos(self.joint1_pitch)]]
 
-        trans_SRz_T_J1_2 = [0.0, 0.0, 0.0, 1.0]
+        trans_SRz_T_J1 = [0.0, 0.0, 0.0, 1.0]
 
-        SRz_T_J1_2 = np.zeros((4,4))
-        SRz_T_J1_2[:3,:3] = rot_SRz_T_J1_2
-        SRz_T_J1_2[:4,3] = trans_SRz_T_J1_2
+        SRz_T_J1 = np.zeros((4,4))
+        SRz_T_J1[:3,:3] = rot_SRz_T_J1
+        SRz_T_J1[:4,3] = trans_SRz_T_J1
 
-        #Dynamic rotation of Joint 1
-        dynamic_rot = tf.transformations.quaternion_from_euler(0.0, self.joint1_pitch, 0.0)
-        translation =  [0.0, 0.0, 0.0]
-        SRz_T_J1 = tf.transformations.quaternion_matrix(dynamic_rot)
-        SRz_T_J1[:3,3] = np.array(translation)
-
-        #Translation based on length of Joint1 arm 
+        #Translation based on length of Joint 1 arm 
         no_rot = tf.transformations.quaternion_from_euler(0.0, 0.0, 0.0)
         translation =  [self.joint1_length, 0.0, 0.0]
         J1_T_STx = tf.transformations.quaternion_matrix(no_rot)
         J1_T_STx[:3,3] = np.array(translation)
 
-        #Dynamic rotation of Joint2
+        #Dynamic rotation about y-axis of Joint 2
         dynamic_rot2 = tf.transformations.quaternion_from_euler(0.0, self.joint2_pitch, 0.0)
         translation =  [0.0, 0.0, 0.0]
         STx_T_J2 = tf.transformations.quaternion_matrix(dynamic_rot2)
         STx_T_J2[:3,3] = np.array(translation)
 
         #matrix multiplication to form the homogenous matrices
-        #V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1)
-        V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1_2)
+        V_T_J1 = np.matmul(V_T_SRz, SRz_T_J1)
         V_T_STx = np.matmul(V_T_J1, J1_T_STx)
         V_T_J2 = np.matmul(V_T_STx, STx_T_J2)
 
-        frame1 = tf_conversions.fromMatrix(V_T_J1)
-        frame2 = tf_conversions.fromMatrix(V_T_J2)
+        frame_J1 = tf_conversions.fromMatrix(V_T_J1)
+        frame_J2 = tf_conversions.fromMatrix(V_T_J2)
 
         #The ripper tip is a point in the J2's frame, this is based on the length of the ripper
-        ripper_tip_pt_J2 =  [self.ripper_length, 0.0, 0.0, 1.0]
-        map_T_J2 =  np.matmul(map_T_vehicle, V_T_J2)
-        ripper_tip_pt_map =  np.matmul(map_T_J2, ripper_tip_pt_J2)
-        ripper_tip = Point()
-        ripper_tip.x = ripper_tip_pt_map[0]
-        ripper_tip.y = ripper_tip_pt_map[1]
-        ripper_tip.z = ripper_tip_pt_map[2]
-        points.append(ripper_tip)
+        ripper_tip_point_J2 =  [self.ripper_length, 0.0, 0.0, 1.0]
+        map_T_J2 =  np.matmul(map_T_V, V_T_J2)
+        ripper_tip_pt_map =  np.matmul(map_T_J2, ripper_tip_point_J2)
+        ripper_tip_point_viz = Point()
+        ripper_tip_point_viz.x = ripper_tip_pt_map[0]
+        ripper_tip_point_viz.y = ripper_tip_pt_map[1]
+        ripper_tip_point_viz.z = ripper_tip_pt_map[2]
+        V_viz_points.append(ripper_tip_point_viz)
 
         #use the ripper's position as an index value to access the gaussian array
         ripper_tip_cell_index_x = int(ripper_tip_pt_map[0]/self.resolution)
         ripper_tip_cell_index_y = int(ripper_tip_pt_map[1]/self.resolution)
 
         #Create a range of index values surrounding index_x and y
-        x = np.arange((ripper_tip_cell_index_x-1),(ripper_tip_cell_index_x+2), 1)
-        y = np.arange((ripper_tip_cell_index_y-1),(ripper_tip_cell_index_y+2), 1)
-        x1, y1 = np.meshgrid(x,y)
-        x2 = x1.ravel()
-        y2 = y1.ravel()
+        nearby_index_cells_range_x = np.arange((ripper_tip_cell_index_x-1),(ripper_tip_cell_index_x+2), 1)
+        nearby_index_cells_range_y = np.arange((ripper_tip_cell_index_y-1),(ripper_tip_cell_index_y+2), 1)
+        nearby_index_cells_mesh_x, nearby_index_cells_mesh_y = np.meshgrid(nearby_index_cells_range_x,nearby_index_cells_range_y)
+        nearby_index_cells_x = nearby_index_cells_mesh_x.ravel()
+        nearby_index_cells_y = nearby_index_cells_mesh_y.ravel()
 
         #First check if the index is within the gaussian array, if it is, then check if the tip of
         #the ripper is beneath the soil, if it is, then remove the soil above the tip and disperse
         #it to the surrounding cells, provided those cells are also within the gaussian array
+        # TODO Remove use of for loops and excess if statements
 
         if (0 <= ripper_tip_cell_index_x <= (self.gaussian_array.shape[0]-1)) and (0 <= ripper_tip_cell_index_y <= (self.gaussian_array.shape[1]-1)):
             if (self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] > ripper_tip_pt_map[2]):
                 diff = self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] - ripper_tip_pt_map[2]
-                for i in range(x2.shape[0]):
-                    if (0 <= x2[i] <= (self.gaussian_array.shape[0]-1)) and (0 <= y2[i] <= (self.gaussian_array.shape[1]-1)):
-                            self.gaussian_array[x2[i]][y2[i]] += diff/8
+                for i in range(nearby_index_cells_x.shape[0]):
+                    if (0 <= nearby_index_cells_x[i] <= (self.gaussian_array.shape[0]-1)) and (0 <= nearby_index_cells_y[i] <= (self.gaussian_array.shape[1]-1)):
+                            self.gaussian_array[nearby_index_cells_x[i]][nearby_index_cells_y[i]] += diff/8
                 self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] = ripper_tip_pt_map[2]
 
         #Publish all messages
-        self.publish_messages(self.pose.position.x, self.pose.position.y, 
-                             self.pose.position.z, q, cloud, points, frame1, frame2)
+        self.publish_messages(V_translation, V_rotation, terrain_grid_points, V_viz_points, frame_J1, frame_J2)
 
-    def publish_messages(self, x, y, z, q, cloud, points, frame1, frame2):
+    def publish_messages(self, V_translation, V_rotation, terrain_grid_points, V_viz_points, frame_J1, frame_J2):
 
         """
         Publishes the pose stamped, multi-array, point-cloud and vehicle footprint vizualization
@@ -321,13 +313,13 @@ class VehicleBot(object):
         msg.header.stamp = rospy.Time.now()
 
         #Pose information
-        msg.pose.position.x = x
-        msg.pose.position.y = y
-        msg.pose.position.z = z
-        msg.pose.orientation.x = q[0]
-        msg.pose.orientation.y = q[1]
-        msg.pose.orientation.z = q[2]
-        msg.pose.orientation.w = q[3]
+        msg.pose.position.x = V_translation[0]
+        msg.pose.position.y = V_translation[1]
+        msg.pose.position.z = V_translation[2]
+        msg.pose.orientation.x = V_rotation[0]
+        msg.pose.orientation.y = V_rotation[1]
+        msg.pose.orientation.z = V_rotation[2]
+        msg.pose.orientation.w = V_rotation[3]
 
 
         ##################################################################################
@@ -342,9 +334,9 @@ class VehicleBot(object):
         array_msg.layout.dim[0].stride = 3
 
         #Append data
-        array_msg.data.append(x)
-        array_msg.data.append(y)
-        array_msg.data.append(z)
+        array_msg.data.append(V_translation[0])
+        array_msg.data.append(V_translation[1])
+        array_msg.data.append(V_translation[2])
 
         ##################################################################################
 
@@ -354,7 +346,7 @@ class VehicleBot(object):
         header = Header()
         header.stamp = rospy.Time.now()
         header.frame_id = 'map'
-        point_cloud = pcl2.create_cloud_xyz32(header, cloud)
+        point_cloud = pcl2.create_cloud_xyz32(header, terrain_grid_points)
 
         ##################################################################################
 
@@ -375,7 +367,7 @@ class VehicleBot(object):
         viz_points.color.r = 1.0
         viz_points.color.g = 0.0
         viz_points.color.b = 0.0
-        viz_points.points = points
+        viz_points.points = V_viz_points
 
 
         ################################################################
@@ -391,8 +383,8 @@ class VehicleBot(object):
         msg2.header.stamp = rospy.Time.now()
 
         #Pose information
-        joint_1 = tf_conversions.toMsg(frame1)
-        joint_2 = tf_conversions.toMsg(frame2)
+        joint_1 = tf_conversions.toMsg(frame_J1)
+        joint_2 = tf_conversions.toMsg(frame_J2)
         
         msg1.pose = joint_1
         msg2.pose = joint_2
