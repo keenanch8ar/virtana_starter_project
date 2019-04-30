@@ -29,7 +29,8 @@ class VehicleBot(object):
         
         #Load parameters to be used in node. Description of each in parameters yaml file.
         self.__dict__.update(rospy.get_param('/map_params'))
-
+        self.__dict__.update(rospy.get_param('/vehicle_params'))
+        
         #Create Gaussian Array of normally distributed noise
         self.gaussian_array = self.create_gaussian_array()
         
