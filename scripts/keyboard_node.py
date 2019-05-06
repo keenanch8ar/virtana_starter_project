@@ -33,7 +33,7 @@ def getKey():
 if __name__ == '__main__':
     settings = termios.tcgetattr(sys.stdin)
 
-    key_pub = rospy.Publisher('/keyboard/joints', JointState, queue_size = 1)
+    key_pub = rospy.Publisher('/keyboard/joints', JointState, latch = True, queue_size = 1)
     rospy.init_node('keyboard_node', anonymous=True)
 
     vel1 = 0.0

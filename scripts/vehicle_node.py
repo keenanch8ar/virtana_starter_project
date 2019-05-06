@@ -15,6 +15,7 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from sensor_msgs.msg import PointCloud2, JointState
 from visualization_msgs.msg import Marker
 from scipy.interpolate import RectBivariateSpline
+import time as timme
 
 class VehicleBot(object):
 
@@ -147,27 +148,23 @@ class VehicleBot(object):
 
         # Calculate z position using linear interpolation and create cloud array
         
-        # 1. Create range to be used in interpolation function
-        terrain_points_x = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
-        terrain_points_y = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
+        # 1. Create ranges to be used in interpolation function
+        terrain_points_x = np.arange(0, self.gaussian_array.shape[1]*self.resolution, self.resolution)
+        terrain_points_y = np.arange(0, self.gaussian_array.shape[0]*self.resolution, self.resolution)
 
-        # 2. Create cloud array to be converted to point cloud for vizualization
-        #TODO do this without for loops
-        terrain_grid_points = []
-        for i in range(self.gaussian_array.shape[0]):
-            for j in range(self.gaussian_array.shape[1]):
-                innerlist = []
-                innerlist.append(terrain_points_x[i])
-                innerlist.append(terrain_points_y[j])
-                innerlist.append(self.gaussian_array[i][j])
-                terrain_grid_points.append(innerlist)
-        
+        # 2. Create array of points to be converted to point cloud for vizualization
+        terrain_mesh_x, terrain_mesh_y = np.meshgrid(terrain_points_x, terrain_points_y)
+        terrain_x = terrain_mesh_x.ravel()
+        terrain_y = terrain_mesh_y.ravel()
+        terrain_z = self.gaussian_array.ravel()
+        terrain_grid_points = np.stack((terrain_x, terrain_y, terrain_z), axis=1)
+
         # 3. Create interpolation function based on the ranges and gaussian data
-        interp_func = RectBivariateSpline(terrain_points_x, terrain_points_y, self.gaussian_array)
+        interp_func = RectBivariateSpline(terrain_points_y, terrain_points_x, self.gaussian_array)
 
         # 4. Find z value for x and y coordinate of vehicle using interpolation function
         # TODO compute z height based on footprint
-        self.pose.position.z = interp_func(self.pose.position.x, self.pose.position.y)
+        self.pose.position.z = interp_func(self.pose.position.y, self.pose.position.x)
 
         # Convert Euler Angles to Quarternion
         V_rotation = tf.transformations.quaternion_from_euler(0.0, 0.0, self.vehicle_yaw)
@@ -197,7 +194,7 @@ class VehicleBot(object):
             p = Point()
             V_footprint_point = np.array([[V_footprint_x[i]],[V_footprint_y[i]], [0.0], [1.0]])
             V_footprint_point = np.matmul(map_T_V, V_footprint_point)
-            V_footprint_point[2, 0] =  interp_func(V_footprint_point[0, 0], V_footprint_point[1, 0])
+            V_footprint_point[2, 0] =  interp_func(V_footprint_point[1, 0], V_footprint_point[0, 0])
             p.x = V_footprint_point[0, 0]
             p.y = V_footprint_point[1, 0]
             p.z = V_footprint_point[2, 0]
@@ -269,8 +266,8 @@ class VehicleBot(object):
         V_viz_points.append(ripper_tip_point_viz)
 
         # use the ripper's position as an index value to access the gaussian array
-        ripper_tip_cell_index_x = int(ripper_tip_pt_map[0]/self.resolution)
-        ripper_tip_cell_index_y = int(ripper_tip_pt_map[1]/self.resolution)
+        ripper_tip_cell_index_x = int(ripper_tip_pt_map[1]/self.resolution)
+        ripper_tip_cell_index_y = int(ripper_tip_pt_map[0]/self.resolution)
 
         # Create a range of index values surrounding index_x and y
         nearby_index_cells_range_x = np.arange((ripper_tip_cell_index_x-1),(ripper_tip_cell_index_x+2), 1)
@@ -291,6 +288,7 @@ class VehicleBot(object):
                     if (0 <= nearby_index_cells_x[i] <= (self.gaussian_array.shape[0]-1)) and (0 <= nearby_index_cells_y[i] <= (self.gaussian_array.shape[1]-1)):
                             self.gaussian_array[nearby_index_cells_x[i]][nearby_index_cells_y[i]] += diff/8
                 self.gaussian_array[ripper_tip_cell_index_x][ripper_tip_cell_index_y] = ripper_tip_pt_map[2]
+        
 
         # Publish all messages
         self.publish_messages(V_translation, V_rotation, terrain_grid_points, V_viz_points, frame_J1, frame_J2)
