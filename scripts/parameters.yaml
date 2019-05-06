@@ -3,10 +3,12 @@ map_params:
   mu: 0.0 # Mean for gaussian noise distribution
   sigma: 0.3 # Standard Deviation for gaussian noise distribution
   sigma_filter: 3.5 # Standard Deviation for gaussian filter
-  length: 5.5 # length of the terrain in meters, m
-  width: 4.5 # width of terrain in meters, m
+  length: 10.3 # length of the terrain in meters, m
+  width: 5.2 # width of terrain in meters, m
   resolution: 0.025 # size of single terrain grid cell in meters per cell,  m/cell
+
+vehicle_params:
   vehicle_length: 0.1 # vehicle length in meters, m
   vehicle_width: 0.05 # vehicle width in meters, m
-
-
+  ripper_length: 0.05 # length of ripper in meters, m
+  joint1_length: 0.1 # length of joint1 in meters, m
